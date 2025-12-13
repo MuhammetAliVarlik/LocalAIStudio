@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  # 1. The React Frontend
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"  # <--- CHANGED to 3000
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - cortex
+
+  # 2. The Python Backend (The "Brain")
+  cortex:
+    build: ./backend/cortex
+    ports:
+      - "8000:8000"
+    environment:
+      # Now we point to the internal docker service name 'ollama'
+      - OLLAMA_URL=http://ollama:11434/api/generate
+    depends_on:
+      - ollama
+
+  # 3. The AI Engine (Ollama inside Docker)
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      # This saves your models so you don't download them every time
+      - ollama_storage:/root/.ollama
+    # Enable GPU support if you have Nvidia drivers installed in WSL2 (Optional but recommended)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  ollama_storage:

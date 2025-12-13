@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+requests
+pydantic
+kokoro-onnx
+soundfile
+numpy

@@ -1,7 +1,0 @@
-{
-  "name": "Local AI OS",
-  "description": "A futuristic, glassmorphic dashboard for local LLM orchestration, coding, and agentic workflows.",
-  "requestFramePermissions": [
-    "microphone"
-  ]
-}
