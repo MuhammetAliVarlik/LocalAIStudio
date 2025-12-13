@@ -304,9 +304,9 @@ const VoxelCloud = ({ state, visualContext, audioLevel, primaryColor }: { state:
         
         // Multi-Color Logic
         if (mode === 'HEART') {
-            // Heart is Red/Pink gradient
-            const hue = 0.9 + (i/COUNT) * 0.15; // 0.9 is magenta-ish/red, goes to red-orange
-            c.setHSL(hue % 1, 0.9, 0.5); 
+            // Vibrant Red/Pink Heart
+            const hue = 0.95 + (Math.sin(i * 0.1 + time) * 0.05);
+            c.setHSL(hue % 1, 1.0, 0.5); 
         }
         else if (mode === 'ROCKET') {
              const yPos = ((i / COUNT) * 4) - 2;
@@ -331,10 +331,15 @@ const VoxelCloud = ({ state, visualContext, audioLevel, primaryColor }: { state:
              c.set(i % 2 === 0 ? '#8b5cf6' : '#06b6d4'); // Purple/Cyan strands
         }
         else if (mode === 'RAIN') {
-             c.set(p.isRainDrop ? '#3b82f6' : '#cbd5e1'); // Blue drops, grey cloud
+             // Vibrant Blue Rain, White/Grey Clouds
+             if (p.isRainDrop) c.set('#2563eb'); // Brighter Blue
+             else c.set('#f8fafc'); // White Clouds
+        }
+        else if (mode === 'CLOUDY') {
+             c.set('#f8fafc'); // White Clouds
         }
         else if (mode === 'THUNDER') {
-             c.set(Math.random() > 0.95 ? '#facc15' : '#475569'); // Flash Yellow/Grey
+             c.set(Math.random() > 0.95 ? '#facc15' : '#64748b'); // Flash Yellow/Slate
         }
         else if (mode === 'HAPPY') {
              c.setHSL(0.1 + (i/COUNT)*0.15, 1, 0.6); // Gold/Orange Gradient
@@ -349,7 +354,6 @@ const VoxelCloud = ({ state, visualContext, audioLevel, primaryColor }: { state:
         else if (mode === 'TRAVEL') c.set('#38bdf8');
         else if (mode === 'BOOK') c.set(i % 2 === 0 ? '#e2e8f0' : '#cbd5e1');
         else if (mode === 'GHOST') c.set('#a5f3fc');
-        else if (mode === 'CLOUDY') c.set('#f1f5f9'); // White/Light Grey Clouds
         else if (mode === 'SNOW') c.set('#f1f5f9');
         else if (mode === 'SUN') c.set(i % 10 === 0 ? '#f59e0b' : '#fbbf24');
         else if (mode === 'ANGRY') c.set(Math.random() > 0.5 ? '#ef4444' : '#b91c1c');
@@ -406,29 +410,31 @@ const VoxelCloud = ({ state, visualContext, audioLevel, primaryColor }: { state:
 
 const VoiceAvatar: React.FC<VoiceAvatarProps> = ({ 
   state, 
-  visualContext = VisualContext.DEFAULT, 
+  visualContext, 
   audioLevel, 
-  primaryColor = '#ffffff',
+  compact, 
+  primaryColor = '#ffffff', 
   visible = true 
 }) => {
   return (
-    <div className={`w-full h-full transition-opacity duration-1000 ${visible ? 'opacity-100' : 'opacity-0'}`}>
-        <Canvas camera={{ position: [0, 0, 11], fov: 30 }} gl={{ antialias: true, alpha: true }} dpr={[1, 2]}>
-            <ambientLight intensity={0.1} />
-            <pointLight position={[10, 10, 10]} intensity={0.5} color={primaryColor} />
-            <pointLight position={[-10, -10, -10]} intensity={0.2} color="#ffffff" />
-            
-            <Float speed={1.5} rotationIntensity={0.2} floatIntensity={0.5} floatingRange={[-0.2, 0.2]}>
-                 <VoxelCloud 
-                    state={state} 
-                    visualContext={visualContext} 
-                    audioLevel={audioLevel} 
-                    primaryColor={primaryColor} 
-                 />
-            </Float>
-            
-            <Stars radius={80} depth={50} count={2000} factor={3} saturation={0} fade speed={0.5} />
-        </Canvas>
+    <div className={`w-full h-full transition-opacity duration-500 ${visible ? 'opacity-100' : 'opacity-0'}`}>
+      <Canvas camera={{ position: [0, 0, compact ? 14 : 11], fov: 30 }} dpr={[1, 2]}>
+          <ambientLight intensity={0.2} />
+          <pointLight position={[10, 10, 10]} intensity={1} color={primaryColor} />
+          
+          {!compact && (
+            <Stars radius={100} depth={50} count={2000} factor={4} saturation={0} fade speed={1} />
+          )}
+
+          <Float speed={2} rotationIntensity={0.2} floatIntensity={0.5}>
+               <VoxelCloud 
+                  state={state} 
+                  visualContext={visualContext || VisualContext.DEFAULT} 
+                  audioLevel={audioLevel} 
+                  primaryColor={primaryColor} 
+               />
+          </Float>
+      </Canvas>
     </div>
   );
 };

@@ -5,7 +5,17 @@ export enum AppMode {
   AUTOMATION = 'AUTOMATION',
   DAILY = 'DAILY',
   RESEARCH = 'RESEARCH',
-  LANGUAGE = 'LANGUAGE'
+  LANGUAGE = 'LANGUAGE',
+  NOTES = 'NOTES',
+  HEALTH = 'HEALTH',
+  COMMS = 'COMMS',
+  SYSTEM = 'SYSTEM',
+  CALENDAR = 'CALENDAR',
+  // Expansion Pack 2
+  ART = 'ART',
+  FINANCE = 'FINANCE',
+  HOME = 'HOME',
+  FOCUS = 'FOCUS'
 }
 
 export enum AvatarState {
@@ -83,6 +93,7 @@ export interface Conversation {
   title: string;
   messages: ChatMessage[];
   lastActive: Date;
+  mode?: AppMode; // Track which mode this conversation belongs to
 }
 
 export type AutomationType = 'HOME' | 'WEB';

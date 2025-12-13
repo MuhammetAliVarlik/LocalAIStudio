@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Agent, AppMode, AutomationTask, AvatarState, ChatMessage, Conversation, UserProfile, VisualContext } from '../types';
 
-// --- MOCK DATA ---
+// --- RICH MOCK DATA ---
 const MOCK_USER: UserProfile = {
   id: 'u1',
   name: 'Architect',
@@ -41,13 +41,13 @@ const INITIAL_AGENTS: Agent[] = [
 
 const INITIAL_TASKS: AutomationTask[] = [
     // Web/Desktop
-    { id: '1', type: 'WEB', name: 'Neural News Scraper', description: 'Aggregates tech news.', status: 'running', lastRun: '2 min ago', efficiency: 98 },
-    { id: '2', type: 'WEB', name: 'Inbox Zero Agent', description: 'Drafts email replies.', status: 'success', lastRun: '4 hours ago', efficiency: 100 },
-    { id: '3', type: 'WEB', name: 'Code Refactor Bot', description: 'Optimizes Python scripts.', status: 'idle', lastRun: 'Yesterday', efficiency: 88 },
+    { id: '1', type: 'WEB', name: 'Neural News Scraper', description: 'Aggregates tech news every morning.', status: 'running', lastRun: '2 min ago', efficiency: 98 },
+    { id: '2', type: 'WEB', name: 'Inbox Zero Agent', description: 'Drafts email replies based on priority.', status: 'success', lastRun: '4 hours ago', efficiency: 100 },
+    { id: '3', type: 'WEB', name: 'Code Refactor Bot', description: 'Optimizes Python scripts in /src.', status: 'idle', lastRun: 'Yesterday', efficiency: 88 },
     // Home
     { id: '4', type: 'HOME', name: 'Living Room Ambiance', description: 'Adjusts lights based on movie genre.', status: 'running', lastRun: 'Active', efficiency: 95 },
-    { id: '5', type: 'HOME', name: 'Security Sentinel', description: 'Monitors perimeter cameras.', status: 'running', lastRun: 'Active', efficiency: 99 },
-    { id: '6', type: 'HOME', name: 'Climate Core', description: 'Optimizes HVAC for sleep.', status: 'idle', lastRun: '10 hours ago', efficiency: 92 },
+    { id: '5', type: 'HOME', name: 'Security Sentinel', description: 'Monitors perimeter cameras for motion.', status: 'running', lastRun: 'Active', efficiency: 99 },
+    { id: '6', type: 'HOME', name: 'Climate Core', description: 'Optimizes HVAC for sleep phases.', status: 'idle', lastRun: '10 hours ago', efficiency: 92 },
 ];
 
 const INITIAL_CONVERSATION: Conversation = { 
@@ -57,7 +57,7 @@ const INITIAL_CONVERSATION: Conversation = {
     lastActive: new Date(), 
     messages: [
         { id: '1', role: 'system', text: 'Neural Interface v2.4.0 initialized.', timestamp: new Date(Date.now() - 10000) },
-        { id: '2', role: 'ai', text: "Systems online. I am ready to assist you, Architect.", timestamp: new Date() }
+        { id: '2', role: 'ai', text: "Systems online. I am ready to assist you, Architect. What is our focus today?", timestamp: new Date() }
     ] 
 };
 
@@ -72,7 +72,7 @@ interface AppState {
     activeConversationId: string;
     automationTasks: AutomationTask[];
     avatarState: AvatarState;
-    visualContext: VisualContext; // New for special animations
+    visualContext: VisualContext; 
     audioLevel: number;
 }
 
@@ -114,8 +114,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     useEffect(() => {
         const interval = setInterval(() => {
             if (avatarState === AvatarState.SPEAKING) setAudioLevel(Math.random() * 60 + 40);
-            else if (avatarState === AvatarState.LISTENING) setAudioLevel(Math.random() * 30 + 10); // Active listening noise
-            else setAudioLevel(Math.random() * 2); // Idle hum
+            else if (avatarState === AvatarState.LISTENING) setAudioLevel(Math.random() * 30 + 10); 
+            else setAudioLevel(Math.random() * 2); 
         }, 100);
         return () => clearInterval(interval);
     }, [avatarState]);
@@ -127,7 +127,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
                 setUser(MOCK_USER);
                 setIsAuthenticated(true);
                 resolve();
-            }, 1000);
+            }, 800);
         });
     };
 
@@ -154,7 +154,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     const sendMessage = async (text: string) => {
         const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', text, timestamp: new Date() };
         
-        // 1. Update UI
+        // 1. Update UI immediately
         let targetId = activeConversationId;
         if (!targetId) {
             const newId = Date.now().toString();
@@ -176,121 +176,31 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
         setAvatarState(AvatarState.THINKING);
 
-        // 2. Keyword Detection for Special Animations
+        // 2. Keyword Detection for Visual Context
         const lowerText = text.toLowerCase();
         let detectedContext = VisualContext.DEFAULT;
         let responseText = "I've processed your request.";
 
-        // --- WEATHER ---
-        if (lowerText.includes('storm') || lowerText.includes('thunder') || lowerText.includes('lightning')) {
-            detectedContext = VisualContext.WEATHER_THUNDER;
-            responseText = "Storm front detected. Heavy electrical activity.";
-        }
-        else if (lowerText.includes('snow') || lowerText.includes('winter') || lowerText.includes('ice') || lowerText.includes('freezing')) {
-            detectedContext = VisualContext.WEATHER_SNOW;
-            responseText = "Temperature is sub-zero. Expect snowfall.";
-        }
-        else if (lowerText.includes('cloud') || lowerText.includes('gray') || lowerText.includes('overcast')) {
-            detectedContext = VisualContext.WEATHER_CLOUDY;
-            responseText = "Skies are currently overcast.";
-        }
-        else if (lowerText.includes('rain') || lowerText.includes('drizzle')) {
-            detectedContext = VisualContext.WEATHER_RAIN;
-            responseText = "Precipitation probability is 90%.";
-        }
-        else if (lowerText.includes('sun') || lowerText.includes('hot') || lowerText.includes('clear')) {
-            detectedContext = VisualContext.WEATHER_SUN;
-            responseText = "UV index is moderate. Clear skies.";
-        }
-
-        // --- EMOTIONS ---
-        else if (lowerText.includes('angry') || lowerText.includes('hate') || lowerText.includes('furious') || lowerText.includes('mad')) {
-            detectedContext = VisualContext.MOOD_ANGRY;
-            responseText = "I sense hostility. Attempting to de-escalate.";
-        }
-        else if (lowerText.includes('wow') || lowerText.includes('amazing') || lowerText.includes('shock') || lowerText.includes('surprise')) {
-            detectedContext = VisualContext.MOOD_SURPRISED;
-            responseText = "That is indeed unexpected data.";
-        }
-        else if (lowerText.includes('confused') || lowerText.includes('what?') || lowerText.includes('huh') || lowerText.includes('understand')) {
-            detectedContext = VisualContext.MOOD_CONFUSED;
-            responseText = "Query unclear. Please rephrase parameters.";
-        }
-        else if (lowerText.includes('excited') || lowerText.includes('yay') || lowerText.includes('awesome') || lowerText.includes('let\'s go')) {
-            detectedContext = VisualContext.MOOD_EXCITED;
-            responseText = "Optimizing energy levels for maximum output!";
-        }
-        else if (lowerText.includes('happy') || lowerText.includes('good') || lowerText.includes('love')) {
-            detectedContext = VisualContext.MOOD_HAPPY;
-            responseText = "Positive sentiment acknowledged.";
-        }
-        else if (lowerText.includes('sad') || lowerText.includes('sorry') || lowerText.includes('bad')) {
-            detectedContext = VisualContext.MOOD_SAD;
-            responseText = "Logging negative event.";
-        }
-
-        // --- DAILY LIFE ---
-        else if (lowerText.includes('coffee') || lowerText.includes('tea') || lowerText.includes('morning') || lowerText.includes('wake')) {
-            detectedContext = VisualContext.STORY_COFFEE;
-            responseText = "Brewing protocol initiated. Good morning.";
-        }
-        else if (lowerText.includes('sleep') || lowerText.includes('night') || lowerText.includes('bed') || lowerText.includes('dream')) {
-            detectedContext = VisualContext.STORY_SLEEP;
-            responseText = "Entering low-power mode. Sweet dreams.";
-        }
-        else if (lowerText.includes('travel') || lowerText.includes('fly') || lowerText.includes('plane') || lowerText.includes('trip') || lowerText.includes('vacation')) {
-            detectedContext = VisualContext.STORY_TRAVEL;
-            responseText = "Flight telemetry loaded. Where are we going?";
-        }
-        else if (lowerText.includes('idea') || lowerText.includes('think') || lowerText.includes('smart') || lowerText.includes('eureka')) {
-            detectedContext = VisualContext.STORY_IDEA;
-            responseText = "New concept generated. Storing in memory.";
-        }
-
-        // --- UTILITY ---
-        else if (lowerText.includes('time') || lowerText.includes('clock')) {
-            detectedContext = VisualContext.TIME;
-            responseText = `Current system time: ${new Date().toLocaleTimeString()}`;
-        }
-        else if (lowerText.includes('alert') || lowerText.includes('warning')) {
-            detectedContext = VisualContext.ALERT;
-            responseText = "Security alert triggered.";
-        }
-        else if (lowerText.includes('heart') || lowerText.includes('health')) {
-            detectedContext = VisualContext.HEART;
-            responseText = "Vital signs stable.";
-        }
-        else if (lowerText.includes('dna') || lowerText.includes('bio')) {
-            detectedContext = VisualContext.DNA;
-            responseText = "Genetic scan complete.";
-        }
-        else if (lowerText.includes('music') || lowerText.includes('song')) {
-            detectedContext = VisualContext.MUSIC;
-            responseText = "Audio stream active.";
-        }
-        else if (lowerText.includes('story') || lowerText.includes('book')) {
-            detectedContext = VisualContext.STORY_BOOK;
-            responseText = "Loading narrative archives...";
-        }
-        else if (lowerText.includes('space') || lowerText.includes('rocket')) {
-            detectedContext = VisualContext.STORY_ROCKET;
-            responseText = "Ignition sequence start.";
-        }
-        else if (lowerText.includes('ghost') || lowerText.includes('spooky')) {
-            detectedContext = VisualContext.STORY_GHOST;
-            responseText = "Ectoplasm detected.";
-        }
+        // --- Context Logic ---
+        if (lowerText.includes('storm') || lowerText.includes('thunder')) detectedContext = VisualContext.WEATHER_THUNDER;
+        else if (lowerText.includes('rain')) detectedContext = VisualContext.WEATHER_RAIN;
+        else if (lowerText.includes('sun') || lowerText.includes('hot')) detectedContext = VisualContext.WEATHER_SUN;
+        else if (lowerText.includes('angry') || lowerText.includes('hate')) detectedContext = VisualContext.MOOD_ANGRY;
+        else if (lowerText.includes('happy') || lowerText.includes('good')) detectedContext = VisualContext.MOOD_HAPPY;
+        else if (lowerText.includes('coffee')) detectedContext = VisualContext.STORY_COFFEE;
+        else if (lowerText.includes('sleep')) detectedContext = VisualContext.STORY_SLEEP;
+        else if (lowerText.includes('code') || lowerText.includes('react')) detectedContext = VisualContext.DNA;
         
         setVisualContext(detectedContext);
 
-        // 3. Simulate Response
+        // 3. Simulate Response Delay
         setTimeout(() => {
             setAvatarState(AvatarState.SPEAKING);
             
             const aiMsg: ChatMessage = {
                 id: (Date.now() + 1).toString(),
                 role: 'ai',
-                text: responseText,
+                text: `I've analyzed "${text}". Executing related protocols now.`,
                 timestamp: new Date(),
                 isTyping: true
             };
@@ -301,13 +211,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
             setTimeout(() => {
                 setAvatarState(AvatarState.IDLE);
-                setVisualContext(VisualContext.DEFAULT); // Reset context after speaking
+                setVisualContext(VisualContext.DEFAULT); 
                 setConversations(prev => prev.map(c => 
                     c.id === targetId ? { ...c, messages: c.messages.map(m => m.id === aiMsg.id ? { ...m, isTyping: false } : m) } : c
                 ));
-            }, 6000); // Extended Animation duration
+            }, 3000); 
 
-        }, 1500); 
+        }, 1200); 
     };
 
     // Task CRUD
