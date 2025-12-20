@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-// FIX: Added 'Brain' to the imports below
-import { Mic, Code, Send, Plus, Menu, Settings, Sparkles, Brain, Zap, LogOut, Sun, Clock, AlertTriangle, X, Terminal, Volume2, CloudRain, ShoppingBag, Activity, Calendar, StickyNote, Smartphone, Grid, Palette, Wallet, Home as HomeIcon, Disc, Newspaper, Languages, FileText } from 'lucide-react';
+import { 
+  Mic, Code, Send, Plus, Menu, Settings, Sparkles, Brain, Zap, LogOut, 
+  Sun, Clock, AlertTriangle, X, Terminal, Volume2, CloudRain, ShoppingBag, 
+  Activity, Calendar, StickyNote, Smartphone, Grid, Palette, Wallet, 
+  Home as HomeIcon, Disc, Newspaper, Languages, FileText 
+} from 'lucide-react';
 import VoiceAvatar from './VoiceAvatar';
-import { AgentBuilder } from './AgentBuilder';
+import { AgentBuilder } from './AgentBuilder'; // <--- The new full-stack builder
 import { CodeStudio } from './CodeStudio';
 import { DailyDashboard } from './DailyDashboard';
 import { ResearchLab } from './ResearchLab';
@@ -87,7 +91,6 @@ export const DashboardShell: React.FC = () => {
   if (!isAuthenticated) return <LoginScreen />;
 
   // --- COMPONENT MAP ---
-  // We define this outside the render loop or useMemo to prevent re-creation
   const COMPONENTS = {
     [AppMode.CODING]: CodeStudio,
     [AppMode.DAILY]: DailyDashboard,
@@ -101,7 +104,7 @@ export const DashboardShell: React.FC = () => {
     [AppMode.ART]: Dreamscape,
     [AppMode.FINANCE]: FinanceVault,
     [AppMode.HOME]: SmartHome3D,
-    [AppMode.BUILDER]: AgentBuilder,
+    [AppMode.BUILDER]: AgentBuilder, // Full Stack Builder
     [AppMode.AUTOMATION]: AutomationPanel,
   };
 
@@ -116,7 +119,6 @@ export const DashboardShell: React.FC = () => {
       </AnimatePresence>
 
       {/* 2. BACKGROUNDS */}
-      {/* Optimization: Only render Aurora if we are NOT in heavy 3D modes */}
       {mode !== AppMode.HOME && mode !== AppMode.ART && <AuroraBackground />}
       
       <SystemMonitor />
@@ -142,7 +144,7 @@ export const DashboardShell: React.FC = () => {
               </div>
               <div className="flex items-center gap-3 group cursor-pointer hover:bg-white/5 p-2 -mx-2 rounded-xl transition-all">
                   <div className="w-10 h-10 rounded-lg p-0.5 bg-gradient-to-br from-zinc-700 to-black shadow-lg relative overflow-hidden border border-white/10">
-                     <img src={activeAgent.avatarUrl} className="w-full h-full rounded-[6px] object-cover grayscale group-hover:grayscale-0 transition-all" alt="agent" />
+                      <img src={activeAgent.avatarUrl} className="w-full h-full rounded-[6px] object-cover grayscale group-hover:grayscale-0 transition-all" alt="agent" />
                   </div>
                   <div>
                       <h3 className="font-bold text-white text-sm tracking-tight group-hover:text-cyan-200 transition-colors">{activeAgent.name}</h3>
@@ -259,9 +261,10 @@ export const DashboardShell: React.FC = () => {
                            state={avatarState} 
                            visualContext={visualContext}
                            audioLevel={audioLevel} 
-                           primaryColor={activeAgent.primaryColor} 
+                           primaryColor={activeAgent.primaryColor} // <--- UPDATED: Dynamic Color
                            visible={true} 
                            customShapeFn={customShapeFn}
+                           onPersonaChange={(id) => actions.setActiveAgent(id)} // <--- UPDATED: Connects 3D Selector to App
                        />
                    )}
                </div>
@@ -289,7 +292,7 @@ export const DashboardShell: React.FC = () => {
                                value={input}
                                onChange={(e) => setInput(e.target.value)}
                                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                               placeholder="Communicate with Neural Core..."
+                               placeholder={`Chat with ${activeAgent.name}...`} // <--- Dynamic Placeholder
                                className="flex-1 bg-transparent border-none outline-none text-white placeholder-zinc-600 px-2 text-base h-12 font-light"
                            />
                            <button onClick={handleSendMessage} className="p-3 bg-white/10 text-white rounded-full hover:bg-white/20 transition-all active:scale-95">

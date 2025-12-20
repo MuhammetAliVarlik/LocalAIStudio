@@ -1,11 +1,9 @@
-version: '3.8'
-
 services:
   # 1. The React Frontend
   frontend:
     build: ./frontend
     ports:
-      - "3000:3000"  # <--- CHANGED to 3000
+      - "3000:3000"
     environment:
       - VITE_API_URL=http://localhost:8000
     depends_on:
@@ -17,8 +15,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Now we point to the internal docker service name 'ollama'
-      - OLLAMA_URL=http://ollama:11434/api/generate
+      # FIX: Remove "/api/generate". Point only to the base URL.
+      - OLLAMA_URL=http://ollama:11434
+      - WORKSPACE_DIR=/app/workspace
+    volumes:
+      - ./workspace_data:/app/workspace
     depends_on:
       - ollama
 
@@ -28,9 +29,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      # This saves your models so you don't download them every time
       - ollama_storage:/root/.ollama
-    # Enable GPU support if you have Nvidia drivers installed in WSL2 (Optional but recommended)
     deploy:
       resources:
         reservations:

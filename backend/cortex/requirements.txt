@@ -2,6 +2,13 @@ fastapi
 uvicorn
 requests
 pydantic
-kokoro-onnx
 soundfile
-numpy
+kokoro-onnx
+# --- LangChain Stack ---
+langchain
+langchain-community
+langchain-ollama
+langchain-huggingface
+langchain-chroma
+chromadb
+sentence-transformers

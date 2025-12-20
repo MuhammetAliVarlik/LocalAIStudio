@@ -1,7 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Agent, AppMode, AutomationTask, AvatarState, ChatMessage, Conversation, UserProfile, VisualContext, ShapeFunction } from '../types';
 
-// --- RICH MOCK DATA ---
+// --- CONFIG ---
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+// --- RICH MOCK DATA (User & Tasks Only) ---
 const MOCK_USER: UserProfile = {
   id: 'u1',
   name: 'Architect',
@@ -9,21 +12,12 @@ const MOCK_USER: UserProfile = {
   avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop'
 };
 
-const INITIAL_AGENTS: Agent[] = [
+// Initial Agents are now fetched from backend, but we keep a fallback just in case
+const FALLBACK_AGENTS: Agent[] = [
     { 
         id: 'nova', name: 'Nova', type: 'daily', primaryColor: '#22d3ee', 
         systemPrompt: 'You are Nova, a helpful daily assistant.', 
         avatarUrl: 'https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=400&auto=format&fit=crop', isCustom: false
-    },
-    { 
-        id: 'devin', name: 'Devin', type: 'coder', primaryColor: '#34d399', 
-        systemPrompt: 'You are Devin, an expert software engineer.', 
-        avatarUrl: 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?q=80&w=400&auto=format&fit=crop', isCustom: false
-    },
-    { 
-        id: 'sage', name: 'Sage', type: 'creative', primaryColor: '#e879f9', 
-        systemPrompt: 'You are Sage, a creative writer and strategist.', 
-        avatarUrl: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=400&auto=format&fit=crop', isCustom: false
     }
 ];
 
@@ -31,9 +25,6 @@ const INITIAL_TASKS: AutomationTask[] = [
     { id: '1', type: 'WEB', name: 'Neural News Scraper', description: 'Aggregates tech news every morning.', status: 'running', lastRun: '2 min ago', efficiency: 98 },
     { id: '2', type: 'WEB', name: 'Inbox Zero Agent', description: 'Drafts email replies based on priority.', status: 'success', lastRun: '4 hours ago', efficiency: 100 },
     { id: '3', type: 'WEB', name: 'Code Refactor Bot', description: 'Optimizes Python scripts in /src.', status: 'idle', lastRun: 'Yesterday', efficiency: 88 },
-    { id: '4', type: 'HOME', name: 'Living Room Ambiance', description: 'Adjusts lights based on movie genre.', status: 'running', lastRun: 'Active', efficiency: 95 },
-    { id: '5', type: 'HOME', name: 'Security Sentinel', description: 'Monitors perimeter cameras for motion.', status: 'running', lastRun: 'Active', efficiency: 99 },
-    { id: '6', type: 'HOME', name: 'Climate Core', description: 'Optimizes HVAC for sleep phases.', status: 'idle', lastRun: '10 hours ago', efficiency: 92 },
 ];
 
 const INITIAL_CONVERSATION: Conversation = { 
@@ -88,7 +79,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     });
     
     const [mode, setMode] = useState<AppMode>(AppMode.VOICE);
-    const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
+    const [agents, setAgents] = useState<Agent[]>(FALLBACK_AGENTS);
     const [activeAgentId, setActiveAgentId] = useState<string>('nova');
     const [conversations, setConversations] = useState<Conversation[]>([INITIAL_CONVERSATION]);
     const [activeConversationId, setActiveConversationId] = useState<string>('1');
@@ -101,6 +92,28 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     
     // Architect State
     const [customShapeFn, setCustomShapeFn] = useState<ShapeFunction | undefined>(undefined);
+
+    // --- 1. FETCH AGENTS FROM BACKEND ---
+    useEffect(() => {
+        fetch(`${API_URL}/api/personas`)
+            .then(res => res.json())
+            .then(data => {
+                if (Array.isArray(data) && data.length > 0) {
+                    // Map backend schema to frontend Agent type
+                    const mappedAgents: Agent[] = data.map((p: any) => ({
+                        id: p.id,
+                        name: p.name,
+                        type: 'daily', // Default type if not in backend
+                        primaryColor: p.color || '#22d3ee',
+                        systemPrompt: p.system_prompt,
+                        avatarUrl: `https://ui-avatars.com/api/?name=${p.name}&background=random`, // Generate avatar if missing
+                        isCustom: p.id !== 'nova'
+                    }));
+                    setAgents(mappedAgents);
+                }
+            })
+            .catch(err => console.error("Failed to load agents:", err));
+    }, []);
 
     // Audio Player
     useEffect(() => {
@@ -131,19 +144,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         }
     }, [audioQueue, isProcessingAudio]);
 
-    // --- FIX: AUTO-RESET VISUAL CONTEXT ---
-    // If the avatar is stuck in Rain/Code/Custom mode, reset it to IDLE Sphere 
-    // 5 seconds after it stops speaking.
-    
+    // Auto-Reset Visual Context
     useEffect(() => {
-        // Condition: We are NOT in default mode AND the avatar is currently IDLE (not speaking/thinking)
         if ((visualContext !== VisualContext.DEFAULT || customShapeFn !== undefined) && avatarState === AvatarState.IDLE) {
             const timer = setTimeout(() => {
-                console.log("🔄 Auto-resetting Visuals to Default Sphere");
                 setVisualContext(VisualContext.DEFAULT);
-                setCustomShapeFn(undefined); // Clear architect code
-            }, 5000); // Wait 5 seconds
-            
+                setCustomShapeFn(undefined); 
+            }, 5000); 
             return () => clearTimeout(timer);
         }
     }, [avatarState, visualContext, customShapeFn]);
@@ -170,9 +177,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     };
 
     const logout = () => { setUser(null); setIsAuthenticated(false); };
+    
+    // Agent Management (Basic Frontend Logic - Persisted via AgentBuilder page mostly)
     const addAgent = (agent: Agent) => { setAgents(prev => [...prev, { ...agent, id: Date.now().toString(), isCustom: true }]); };
     const updateAgent = (agent: Agent) => { setAgents(prev => prev.map(a => a.id === agent.id ? agent : a)); };
-    const deleteAgent = (id: string) => { setAgents(prev => prev.filter(a => a.id !== id)); if (activeAgentId === id) setActiveAgentId(agents[0].id); };
+    const deleteAgent = (id: string) => { setAgents(prev => prev.filter(a => a.id !== id)); if (activeAgentId === id) setActiveAgentId(agents[0]?.id || 'nova'); };
 
     // --- MAIN CHAT LOGIC ---
     const sendMessage = async (text: string) => {
@@ -193,28 +202,19 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
         const lowerText = text.toLowerCase().trim();
 
-        // 1. ARCHITECT MODE CHECK
+        // 1. ARCHITECT MODE CHECK (3D Code Gen)
         if (lowerText.startsWith("make") || lowerText.startsWith("change") || lowerText.startsWith("create")) {
             setAvatarState(AvatarState.THINKING);
-            fetch('http://localhost:8000/api/architect', {
+            fetch(`${API_URL}/api/architect`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt: text, model: "llama3.2:1b" })
+                body: JSON.stringify({ prompt: text, model: "deepseek-coder" })
             })
             .then(res => res.json())
             .then(data => {
                 if (data.code) {
                     try {
-                        console.log("Raw LLM Code:", data.code);
-                        let safeCode = data.code;
-
-                        if (safeCode.match(/^(I can't|I cannot|Sorry|As an AI|I am unable)/i)) {
-                            console.warn("⚠️ LLM Refused:", safeCode);
-                            setAvatarState(AvatarState.IDLE);
-                            return; 
-                        }
-
-                        safeCode = safeCode
+                        let safeCode = data.code
                             .replace(/(const|let|var)\s+count\s*=/gi, '// count redeclared')
                             .replace(/(const|let|var)\s+time\s*=/gi, '// time redeclared')
                             .replace(/(const|let|var)\s+i\s*=/gi, '// i redeclared');
@@ -224,21 +224,16 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
                         }
 
                         const fn = new Function('i', 'count', 'time', safeCode);
-                        
                         // @ts-ignore
                         setCustomShapeFn(() => fn); 
                         setVisualContext(VisualContext.CUSTOM);
                         setAvatarState(AvatarState.IDLE);
-                        console.log("✅ Architect Code Applied");
-
                     } catch (e) {
-                        console.error("Compilation Failed:", e);
                         setAvatarState(AvatarState.IDLE);
                     }
                 }
             })
             .catch(err => {
-                console.error("Network Error:", err);
                 setAvatarState(AvatarState.IDLE);
             });
             return; 
@@ -261,12 +256,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
             setCustomShapeFn(undefined); 
         }
 
-        // 3. CHAT LOGIC
+        // 3. CHAT LOGIC (PERSONA AWARE)
         try {
-            const response = await fetch('http://localhost:8000/api/chat', {
+            const response = await fetch(`${API_URL}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: text, model: "llama3.2:1b" })
+                // NEW: Pass activeAgentId as persona_id so backend uses correct brain
+                body: JSON.stringify({ message: text, model: "deepseek-coder", persona_id: activeAgentId })
             });
 
             if (!response.body) throw new Error("No response body");
@@ -295,7 +291,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
                 if (sentenceBuffer.match(/[.!?]/)) {
                     const sentence = sentenceBuffer.trim();
                     if (sentence.length > 0) {
-                        fetch('http://localhost:8000/api/tts', {
+                        fetch(`${API_URL}/api/tts`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ text: sentence, voice: "af_sarah" })
@@ -318,7 +314,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
             }
 
             if (sentenceBuffer.trim().length > 0) {
-                fetch('http://localhost:8000/api/tts', {
+                fetch(`${API_URL}/api/tts`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text: sentenceBuffer, voice: "af_sarah" })
@@ -329,7 +325,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
             setConversations(prev => prev.map(c => c.id === targetId ? { ...c, messages: c.messages.map(m => m.id === aiMsgId ? { ...m, text: fullText, isTyping: false } : m) } : c));
             
-            // This is handled by the audio queue effect, but good to be safe
             if (audioQueue.length === 0 && sentenceBuffer.length === 0) setAvatarState(AvatarState.IDLE);
 
         } catch (error) {
