@@ -1,14 +1,17 @@
-import React, { useState } from 'react';
-import { CloudRain, TrendingUp, Calendar, CheckSquare, Bell, MoreHorizontal, ArrowUpRight, DollarSign, Newspaper, ExternalLink } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { CloudRain, TrendingUp, Calendar, CheckSquare, Bell, MoreHorizontal, ArrowUpRight, DollarSign, Newspaper, ExternalLink, Activity, Cpu, Sparkles, Terminal } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useApp } from '../context/AppContext';
 
-const Widget = ({ title, children, className = '', icon: Icon }: { title: string, children: React.ReactNode, className?: string, icon: any }) => (
-    <div className={`glass-panel rounded-2xl p-5 flex flex-col ${className} hover:border-white/30 hover:shadow-[0_0_20px_rgba(0,0,0,0.5)] transition-all duration-300 group`}>
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+const Widget = ({ title, children, className = '', icon: Icon, headerAction }: { title: string, children: React.ReactNode, className?: string, icon: any, headerAction?: React.ReactNode }) => (
+    <div className={`glass-panel rounded-2xl p-5 flex flex-col ${className} hover:border-white/20 transition-all duration-300 group shadow-lg`}>
         <div className="flex justify-between items-center mb-4">
             <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2 group-hover:text-zinc-300 transition-colors">
-                <Icon size={14} /> {title}
+                <Icon size={14} className="text-zinc-500 group-hover:text-cyan-400 transition-colors" /> {title}
             </h3>
-            <button className="text-zinc-600 hover:text-white transition-colors"><MoreHorizontal size={14}/></button>
+            {headerAction || <button className="text-zinc-600 hover:text-white transition-colors"><MoreHorizontal size={14}/></button>}
         </div>
         <div className="flex-1 flex flex-col">
             {children}
@@ -16,144 +19,234 @@ const Widget = ({ title, children, className = '', icon: Icon }: { title: string
     </div>
 );
 
-export const DailyDashboard: React.FC = () => {
-  const [tasks, setTasks] = useState([
-     { txt: 'Code Review: Neural Core', done: true },
-     { txt: 'Update System Prompts', done: false },
-     { txt: 'Weekly Sync with Sage', done: false },
-     { txt: 'Deploy Agent V3', done: false },
-     { txt: 'Research Quantum ML', done: false },
-  ]);
+// Typewriter effect for the briefing
+const Typewriter = ({ text }: { text: string }) => {
+    const [displayed, setDisplayed] = useState('');
+    
+    useEffect(() => {
+        setDisplayed('');
+        let i = 0;
+        const interval = setInterval(() => {
+            if (i < text.length) {
+                setDisplayed(prev => prev + text.charAt(i));
+                i++;
+            } else {
+                clearInterval(interval);
+            }
+        }, 20); // Speed
+        return () => clearInterval(interval);
+    }, [text]);
 
-  const toggleTask = (index: number) => {
-      const newTasks = [...tasks];
-      newTasks[index].done = !newTasks[index].done;
-      setTasks(newTasks);
-  };
+    return <p className="text-zinc-300 leading-relaxed text-sm font-light font-sans">{displayed}</p>;
+};
+
+export const DailyDashboard: React.FC = () => {
+  const { state, actions } = useApp();
+  const { user, automationTasks, activeAgentId, agents } = state;
+  const activeAgent = agents.find(a => a.id === activeAgentId) || agents[0];
+  
+  const [briefing, setBriefing] = useState<string>('');
+  const [isLoadingBriefing, setIsLoadingBriefing] = useState(false);
+  const [currentDate, setCurrentDate] = useState('');
+
+  // 1. Fetch AI Briefing on Mount or Agent Switch
+  useEffect(() => {
+    const fetchBriefing = async () => {
+        setIsLoadingBriefing(true);
+        try {
+            const res = await fetch(`${API_URL}/api/briefing`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ persona_id: activeAgentId })
+            });
+            const data = await res.json();
+            setBriefing(data.briefing || "Systems nominal. Ready for input.");
+        } catch (e) {
+            setBriefing("Unable to establish neural uplink for briefing.");
+        } finally {
+            setIsLoadingBriefing(false);
+        }
+    };
+    fetchBriefing();
+
+    // Date String
+    const date = new Date();
+    setCurrentDate(date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }));
+  }, [activeAgentId]);
+
+  // Filter Tasks
+  const activeTasks = automationTasks.filter(t => t.status === 'running');
+  const recentTasks = automationTasks.slice(0, 5);
 
   return (
-    <div className="w-full h-full p-8 overflow-y-auto custom-scrollbar">
-        <header className="mb-8 animate-fade-in">
-            <h1 className="text-3xl font-bold text-white mb-2">Good Morning, Architect.</h1>
-            <p className="text-zinc-500 font-mono text-sm">System status optimal. Here is your daily briefing.</p>
+    <div className="w-full h-full p-6 md:p-10 overflow-y-auto custom-scrollbar bg-black/20">
+        {/* Dynamic Header */}
+        <header className="mb-10 animate-fade-in flex flex-col md:flex-row justify-between md:items-end gap-4">
+            <div>
+                <h1 className="text-3xl md:text-4xl font-bold text-white mb-2 tracking-tight">
+                    Good Morning, <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500">{user?.name || 'Architect'}</span>.
+                </h1>
+                <p className="text-zinc-500 font-mono text-sm flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    SYSTEM ONLINE • {currentDate.toUpperCase()}
+                </p>
+            </div>
+            <div className="flex gap-2">
+                 <button className="px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-xs font-bold text-zinc-400 hover:text-white hover:bg-white/10 transition-all flex items-center gap-2">
+                     <Calendar size={14} /> CALENDAR
+                 </button>
+                 <button className="px-4 py-2 bg-cyan-500/10 border border-cyan-500/20 rounded-lg text-xs font-bold text-cyan-400 hover:bg-cyan-500/20 transition-all flex items-center gap-2">
+                     <Terminal size={14} /> NEW SESSION
+                 </button>
+            </div>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 grid-rows-4 gap-4 min-h-[800px]">
-            {/* Weather */}
-            <Widget title="Atmosphere" icon={CloudRain} className="md:col-span-1 md:row-span-2 bg-gradient-to-br from-blue-900/10 to-transparent">
-                <div className="flex flex-col items-center justify-center flex-1 text-center group cursor-default">
-                    <CloudRain size={64} className="text-blue-400 mb-4 drop-shadow-[0_0_15px_rgba(59,130,246,0.5)] group-hover:scale-110 transition-transform duration-500" />
-                    <div className="text-5xl font-bold text-white mb-1">64°</div>
-                    <div className="text-blue-300 font-medium">Heavy Rain</div>
-                    <div className="mt-6 w-full grid grid-cols-3 text-xs text-zinc-500 border-t border-white/5 pt-4">
-                         <div>
-                             <div className="font-bold text-white">88%</div>
-                             <div>Hum</div>
+        <div className="grid grid-cols-1 md:grid-cols-4 grid-rows-auto gap-6 pb-20">
+            
+            {/* 1. AI BRIEFING (Hero Card) */}
+            <div className="md:col-span-2 md:row-span-1 glass-panel rounded-2xl p-6 relative overflow-hidden border border-white/10 bg-gradient-to-br from-indigo-900/10 to-transparent">
+                 <div className="absolute top-0 right-0 p-32 bg-indigo-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none" />
+                 <div className="flex items-center gap-3 mb-4">
+                     <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
+                         <Sparkles className="text-indigo-400" size={20} />
+                     </div>
+                     <div>
+                         <h3 className="font-bold text-white text-sm">Daily Briefing</h3>
+                         <div className="text-[10px] text-zinc-500 font-mono uppercase">Generated by {activeAgent.name}</div>
+                     </div>
+                 </div>
+                 <div className="min-h-[80px]">
+                     {isLoadingBriefing ? (
+                         <div className="flex items-center gap-2 text-zinc-500 text-sm animate-pulse">
+                             <Activity size={14} className="animate-spin" /> Analyzing neural patterns...
                          </div>
-                         <div>
-                             <div className="font-bold text-white">12mph</div>
-                             <div>Wind</div>
-                         </div>
-                         <div>
-                             <div className="font-bold text-white">0.8"</div>
-                             <div>Prec</div>
-                         </div>
+                     ) : (
+                         <Typewriter text={briefing} />
+                     )}
+                 </div>
+            </div>
+
+            {/* 2. SYSTEM HEALTH (Mock) */}
+            <Widget title="System Status" icon={Cpu} className="md:col-span-1 bg-black/40">
+                <div className="space-y-4 mt-2">
+                    <div>
+                        <div className="flex justify-between text-[10px] text-zinc-500 font-bold mb-1 uppercase">
+                            <span>CPU Load</span> <span>32%</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                            <div className="h-full bg-emerald-500 w-[32%] rounded-full" />
+                        </div>
+                    </div>
+                    <div>
+                        <div className="flex justify-between text-[10px] text-zinc-500 font-bold mb-1 uppercase">
+                            <span>Memory</span> <span>12.4GB / 32GB</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                            <div className="h-full bg-cyan-500 w-[45%] rounded-full" />
+                        </div>
+                    </div>
+                    <div>
+                        <div className="flex justify-between text-[10px] text-zinc-500 font-bold mb-1 uppercase">
+                            <span>Storage</span> <span>1.2TB Free</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                            <div className="h-full bg-indigo-500 w-[78%] rounded-full" />
+                        </div>
                     </div>
                 </div>
             </Widget>
 
-            {/* Finance */}
-            <Widget title="Market Watch" icon={TrendingUp} className="md:col-span-2 md:row-span-2">
-                 <div className="flex gap-4 mb-6">
-                     <div className="flex-1 bg-white/5 rounded-xl p-3 border border-white/5 hover:bg-white/10 transition-colors cursor-pointer group/market">
-                         <div className="text-xs text-zinc-500 mb-1 flex justify-between">NASDAQ <ArrowUpRight size={10} className="opacity-0 group-hover/market:opacity-100" /></div>
-                         <div className="text-xl font-bold text-white">14,892.21</div>
-                         <div className="text-emerald-400 text-xs flex items-center mt-1"><ArrowUpRight size={12}/> +1.24%</div>
-                     </div>
-                     <div className="flex-1 bg-white/5 rounded-xl p-3 border border-white/5 hover:bg-white/10 transition-colors cursor-pointer group/market">
-                         <div className="text-xs text-zinc-500 mb-1 flex justify-between">BTC/USD <ArrowUpRight size={10} className="opacity-0 group-hover/market:opacity-100" /></div>
-                         <div className="text-xl font-bold text-white">$64,230</div>
-                         <div className="text-red-400 text-xs flex items-center mt-1"><ArrowUpRight size={12} className="rotate-90"/> -0.45%</div>
-                     </div>
-                     <div className="flex-1 bg-white/5 rounded-xl p-3 border border-white/5 hover:bg-white/10 transition-colors cursor-pointer group/market">
-                         <div className="text-xs text-zinc-500 mb-1 flex justify-between">ETH <ArrowUpRight size={10} className="opacity-0 group-hover/market:opacity-100" /></div>
-                         <div className="text-xl font-bold text-white">$3,450</div>
-                         <div className="text-emerald-400 text-xs flex items-center mt-1"><ArrowUpRight size={12}/> +2.10%</div>
-                     </div>
-                 </div>
-                 <div className="flex-1 bg-gradient-to-t from-emerald-500/10 to-transparent rounded-lg border border-white/5 relative overflow-hidden flex items-end">
-                      {/* Fake Chart */}
-                      <svg className="w-full h-32 text-emerald-500" preserveAspectRatio="none" viewBox="0 0 100 100">
-                          <path d="M0 100 L0 80 L10 75 L20 85 L30 60 L40 65 L50 40 L60 45 L70 20 L80 25 L90 10 L100 5 L100 100 Z" fill="currentColor" fillOpacity="0.2" />
-                          <path d="M0 80 L10 75 L20 85 L30 60 L40 65 L50 40 L60 45 L70 20 L80 25 L90 10 L100 5" fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />
-                      </svg>
-                 </div>
+            {/* 3. WEATHER (Mock) */}
+            <Widget title="Atmosphere" icon={CloudRain} className="md:col-span-1 bg-gradient-to-b from-blue-900/10 to-transparent">
+                <div className="flex flex-col items-center justify-center flex-1 text-center">
+                    <CloudRain size={48} className="text-blue-400 mb-2 drop-shadow-[0_0_15px_rgba(59,130,246,0.3)]" />
+                    <div className="text-4xl font-bold text-white">64°</div>
+                    <div className="text-blue-300 text-xs font-bold uppercase tracking-wider mt-1">Heavy Rain</div>
+                </div>
             </Widget>
 
-            {/* Tasks */}
-            <Widget title="Priority Queue" icon={CheckSquare} className="md:col-span-1 md:row-span-4">
-                 <div className="space-y-2">
-                     {tasks.map((t, i) => (
-                         <div 
-                            key={i} 
-                            onClick={() => toggleTask(i)}
-                            className={`flex items-center gap-3 p-3 rounded-lg border transition-all cursor-pointer group ${t.done ? 'bg-black/40 border-transparent opacity-50' : 'bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/20'}`}
-                        >
-                             <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${t.done ? 'bg-cyan-500 border-cyan-500' : 'border-zinc-600 group-hover:border-zinc-400'}`}>
-                                 {t.done && <ArrowUpRight size={14} className="text-black rotate-45" />}
+            {/* 4. ACTIVE TASKS (Real Data) */}
+            <Widget title="Active Protocols" icon={Activity} className="md:col-span-2 md:row-span-2" headerAction={<div className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[10px] font-bold border border-amber-500/20">{activeTasks.length} RUNNING</div>}>
+                 <div className="space-y-3 mt-2">
+                     {recentTasks.length === 0 ? (
+                         <div className="text-center text-zinc-600 text-sm py-8">No automation tasks in queue.</div>
+                     ) : (
+                         recentTasks.map(task => (
+                             <div key={task.id} className="flex items-center gap-4 p-3 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-all cursor-pointer group">
+                                  <div className={`p-2 rounded-lg ${task.status === 'running' ? 'bg-amber-500/10 text-amber-500' : task.status === 'success' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-800 text-zinc-500'}`}>
+                                      {task.status === 'running' ? <Activity size={16} className="animate-spin-slow" /> : <CheckSquare size={16} />}
+                                  </div>
+                                  <div className="flex-1">
+                                      <h4 className="text-sm font-bold text-zinc-200 group-hover:text-white transition-colors">{task.name}</h4>
+                                      <p className="text-[10px] text-zinc-500 font-mono">{task.type} • Last run: {task.lastRun}</p>
+                                  </div>
+                                  <div className="w-24 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                                      <div className={`h-full rounded-full ${task.efficiency > 90 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{width: `${task.efficiency}%`}} />
+                                  </div>
+                                  <span className="text-[10px] text-zinc-500 font-mono w-8 text-right">{task.efficiency}%</span>
                              </div>
-                             <span className={`text-sm select-none ${t.done ? 'text-zinc-500 line-through' : 'text-zinc-200'}`}>{t.txt}</span>
-                         </div>
-                     ))}
+                         ))
+                     )}
                  </div>
-                 <button className="mt-4 w-full py-2 border border-dashed border-zinc-700 text-zinc-500 text-xs font-bold rounded-lg hover:text-white hover:border-zinc-500 transition-colors">
-                     + ADD TASK
+                 <button onClick={() => actions.setMode('AUTOMATION' as any)} className="mt-auto w-full py-3 border-t border-white/5 text-zinc-500 hover:text-white text-xs font-bold uppercase tracking-wider transition-colors">
+                     View All Automations
                  </button>
             </Widget>
 
-            {/* News */}
+            {/* 5. NEWS FEED (Mock Masonry) */}
             <Widget title="Global Intel" icon={Newspaper} className="md:col-span-2 md:row-span-2">
-                 <div className="space-y-4">
+                 <div className="grid grid-cols-2 gap-4">
                      {[
-                         { src: 'TechCrunch', title: 'Generative AI models reach new efficiency milestone', time: '10m ago' },
-                         { src: 'The Verge', title: 'Local LLMs are the future of privacy, study says', time: '1h ago' },
-                         { src: 'Wired', title: 'New neural hardware accelerates edge computing', time: '3h ago' },
+                         { src: 'TechCrunch', title: 'Generative AI models reach new efficiency milestone in edge computing', img: 'https://images.unsplash.com/photo-1620712943543-bcc4688e7485?q=80&w=400&auto=format&fit=crop' },
+                         { src: 'The Verge', title: 'SpaceX launches new satellite constellation for global coverage', img: 'https://images.unsplash.com/photo-1516849841032-87cbac4d88f7?q=80&w=400&auto=format&fit=crop' },
+                         { src: 'Wired', title: 'The future of neural interfaces: Direct brain-to-text communication', img: 'https://images.unsplash.com/photo-1555255707-c07966088b7b?q=80&w=400&auto=format&fit=crop' },
+                         { src: 'Ars Technica', title: 'Quantum computing breakthrough enables new encryption standards', img: 'https://images.unsplash.com/photo-1635070041078-e363dbe005cb?q=80&w=400&auto=format&fit=crop' },
                      ].map((n, i) => (
-                         <div key={i} className="flex gap-4 border-b border-white/5 pb-4 last:border-0 last:pb-0 group cursor-pointer hover:bg-white/5 p-2 -mx-2 rounded-lg transition-colors">
-                              <div className="w-16 h-16 bg-zinc-800 rounded-lg flex-shrink-0 overflow-hidden relative">
-                                  {/* Placeholder Image */}
-                                  <div className="absolute inset-0 bg-gradient-to-br from-zinc-700 to-zinc-800" />
+                         <div key={i} className="group cursor-pointer">
+                              <div className="aspect-video rounded-lg overflow-hidden mb-2 border border-white/5 relative">
+                                  <img src={n.img} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110 opacity-60 group-hover:opacity-100" />
+                                  <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-bold text-white border border-white/10">{n.src}</div>
                               </div>
-                              <div className="flex-1">
-                                  <div className="flex items-center gap-2 mb-1">
-                                      <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-zinc-300">{n.src}</span>
-                                      <span className="text-[10px] text-zinc-600">{n.time}</span>
-                                  </div>
-                                  <h4 className="text-sm font-medium text-zinc-200 group-hover:text-cyan-400 transition-colors leading-snug">{n.title}</h4>
-                              </div>
-                              <ExternalLink size={14} className="text-zinc-600 opacity-0 group-hover:opacity-100 transition-opacity self-center" />
+                              <h4 className="text-xs font-bold text-zinc-400 group-hover:text-white transition-colors leading-snug line-clamp-2">{n.title}</h4>
                          </div>
                      ))}
                  </div>
             </Widget>
 
-            {/* Calendar */}
-            <Widget title="Schedule" icon={Calendar} className="md:col-span-1 md:row-span-2">
-                 <div className="flex flex-col gap-3">
-                     <div className="p-3 bg-cyan-500/10 border-l-2 border-cyan-500 rounded-r-lg hover:bg-cyan-500/20 transition-colors cursor-pointer">
-                         <div className="text-xs text-cyan-500 font-bold mb-0.5">10:00 AM</div>
-                         <div className="text-sm text-cyan-100">Deep Work: Coding</div>
+            {/* 6. FINANCE (Mini) */}
+            <Widget title="Market Watch" icon={TrendingUp} className="md:col-span-1">
+                 <div className="flex flex-col gap-4 mt-2">
+                     <div className="flex justify-between items-center group cursor-pointer">
+                         <div className="flex flex-col">
+                             <span className="text-xs font-bold text-zinc-300 group-hover:text-white">BTC</span>
+                             <span className="text-[10px] text-zinc-500">Bitcoin</span>
+                         </div>
+                         <div className="flex flex-col items-end">
+                             <span className="text-sm font-mono font-bold text-white">$64,230</span>
+                             <span className="text-[10px] text-emerald-400 flex items-center">+1.2% <ArrowUpRight size={8} /></span>
+                         </div>
                      </div>
-                     <div className="p-3 bg-white/5 border-l-2 border-zinc-500 rounded-r-lg hover:bg-white/10 transition-colors cursor-pointer">
-                         <div className="text-xs text-zinc-500 font-bold mb-0.5">02:00 PM</div>
-                         <div className="text-sm text-zinc-300">System Maintenance</div>
-                     </div>
-                     <div className="p-3 bg-white/5 border-l-2 border-zinc-500 rounded-r-lg hover:bg-white/10 transition-colors cursor-pointer opacity-50">
-                         <div className="text-xs text-zinc-500 font-bold mb-0.5">04:30 PM</div>
-                         <div className="text-sm text-zinc-300">Sync with Nova</div>
+                     <div className="w-full h-px bg-white/5" />
+                     <div className="flex justify-between items-center group cursor-pointer">
+                         <div className="flex flex-col">
+                             <span className="text-xs font-bold text-zinc-300 group-hover:text-white">NVDA</span>
+                             <span className="text-[10px] text-zinc-500">NVIDIA Corp</span>
+                         </div>
+                         <div className="flex flex-col items-end">
+                             <span className="text-sm font-mono font-bold text-white">$892.10</span>
+                             <span className="text-[10px] text-emerald-400 flex items-center">+3.4% <ArrowUpRight size={8} /></span>
+                         </div>
                      </div>
                  </div>
             </Widget>
+
+             {/* 7. QUICK ACTION */}
+            <div className="md:col-span-1 glass-panel rounded-2xl p-5 border border-dashed border-zinc-700 hover:border-zinc-500 hover:bg-white/5 transition-all cursor-pointer flex flex-col items-center justify-center text-zinc-500 hover:text-white group">
+                <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                    <DollarSign size={20} />
+                </div>
+                <span className="text-xs font-bold uppercase tracking-widest">Add Widget</span>
+            </div>
 
         </div>
     </div>

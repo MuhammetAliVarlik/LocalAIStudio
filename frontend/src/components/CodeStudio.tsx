@@ -214,7 +214,7 @@ export const CodeStudio: React.FC = () => {
           const response = await fetch(`${API_URL}/api/chat`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ message: userText, model: 'deepseek-coder' }),
+              body: JSON.stringify({ message: userText, model: 'llama3.1' }),
           });
 
           setAvatarState(AvatarState.SPEAKING);

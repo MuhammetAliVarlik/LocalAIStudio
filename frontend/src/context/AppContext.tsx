@@ -9,7 +9,7 @@ const MOCK_USER: UserProfile = {
   id: 'u1',
   name: 'Architect',
   role: 'admin',
-  avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop'
+  avatarUrl: '[https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop](https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop)'
 };
 
 // Initial Agents are now fetched from backend, but we keep a fallback just in case
@@ -17,7 +17,8 @@ const FALLBACK_AGENTS: Agent[] = [
     { 
         id: 'nova', name: 'Nova', type: 'daily', primaryColor: '#22d3ee', 
         systemPrompt: 'You are Nova, a helpful daily assistant.', 
-        avatarUrl: 'https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=400&auto=format&fit=crop', isCustom: false
+        avatarUrl: '[https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=400&auto=format&fit=crop](https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=400&auto=format&fit=crop)', isCustom: false,
+        voice: 'af_sarah'
     }
 ];
 
@@ -48,7 +49,8 @@ interface AppState {
     avatarState: AvatarState;
     visualContext: VisualContext; 
     audioLevel: number;
-    customShapeFn?: ShapeFunction; 
+    customShapeFn?: ShapeFunction;
+    isListening?: boolean; 
 }
 
 interface AppActions {
@@ -66,6 +68,8 @@ interface AppActions {
     toggleTaskStatus: (id: string) => void;
     deleteTask: (id: string) => void;
     setAvatarState: (state: AvatarState) => void;
+    setListening: (listening: boolean) => void;
+    speak: (text: string) => Promise<void>;
 }
 
 const AppContext = createContext<{ state: AppState; actions: AppActions } | null>(null);
@@ -75,7 +79,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     // State
     const [isAuthenticated, setIsAuthenticated] = useState(true); 
     const [user, setUser] = useState<UserProfile | null>({
-        id: 'dev', name: 'Architect', role: 'admin', avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop' 
+        id: 'dev', name: 'Architect', role: 'admin', avatarUrl: '[https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop](https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop)' 
     });
     
     const [mode, setMode] = useState<AppMode>(AppMode.VOICE);
@@ -89,6 +93,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     const [audioLevel, setAudioLevel] = useState(0);
     const [audioQueue, setAudioQueue] = useState<string[]>([]);
     const [isProcessingAudio, setIsProcessingAudio] = useState(false);
+    const [isListening, setIsListening] = useState(false);
     
     // Architect State
     const [customShapeFn, setCustomShapeFn] = useState<ShapeFunction | undefined>(undefined);
@@ -106,8 +111,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
                         type: 'daily', // Default type if not in backend
                         primaryColor: p.color || '#22d3ee',
                         systemPrompt: p.system_prompt,
-                        avatarUrl: `https://ui-avatars.com/api/?name=${p.name}&background=random`, // Generate avatar if missing
-                        isCustom: p.id !== 'nova'
+                        avatarUrl: `https://ui-avatars.com/api/?name=${p.name}&background=random`, 
+                        isCustom: p.id !== 'nova',
+                        voice: p.voice || 'af_sarah'
                     }));
                     setAgents(mappedAgents);
                 }
@@ -178,10 +184,27 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
     const logout = () => { setUser(null); setIsAuthenticated(false); };
     
-    // Agent Management (Basic Frontend Logic - Persisted via AgentBuilder page mostly)
+    // Agent Management
     const addAgent = (agent: Agent) => { setAgents(prev => [...prev, { ...agent, id: Date.now().toString(), isCustom: true }]); };
     const updateAgent = (agent: Agent) => { setAgents(prev => prev.map(a => a.id === agent.id ? agent : a)); };
     const deleteAgent = (id: string) => { setAgents(prev => prev.filter(a => a.id !== id)); if (activeAgentId === id) setActiveAgentId(agents[0]?.id || 'nova'); };
+
+    // --- SPEAK HELPER ---
+    const speak = async (text: string) => {
+        const currentAgent = agents.find(a => a.id === activeAgentId);
+        const voiceId = (currentAgent as any)?.voice || "af_sarah";
+        try {
+            const res = await fetch(`${API_URL}/api/tts`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, voice: voiceId }) 
+            });
+            const blob = await res.blob();
+            setAudioQueue(prev => [...prev, URL.createObjectURL(blob)]);
+        } catch (e) {
+            console.error(e);
+        }
+    };
 
     // --- MAIN CHAT LOGIC ---
     const sendMessage = async (text: string) => {
@@ -208,7 +231,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
             fetch(`${API_URL}/api/architect`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt: text, model: "deepseek-coder" })
+                body: JSON.stringify({ prompt: text, model: "llama3.1" }) // Using llama for architect too
             })
             .then(res => res.json())
             .then(data => {
@@ -258,11 +281,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
         // 3. CHAT LOGIC (PERSONA AWARE)
         try {
+            // Retrieve dynamic voice
+            const currentAgent = agents.find(a => a.id === activeAgentId);
+            const voiceId = (currentAgent as any)?.voice || "af_sarah";
+
             const response = await fetch(`${API_URL}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                // NEW: Pass activeAgentId as persona_id so backend uses correct brain
-                body: JSON.stringify({ message: text, model: "deepseek-coder", persona_id: activeAgentId })
+                body: JSON.stringify({ message: text, model: "llama3.1", persona_id: activeAgentId })
             });
 
             if (!response.body) throw new Error("No response body");
@@ -294,7 +320,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
                         fetch(`${API_URL}/api/tts`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ text: sentence, voice: "af_sarah" })
+                            body: JSON.stringify({ text: sentence, voice: voiceId }) // DYNAMIC VOICE
                         })
                         .then(res => res.blob())
                         .then(blob => {
@@ -317,7 +343,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
                 fetch(`${API_URL}/api/tts`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: sentenceBuffer, voice: "af_sarah" })
+                    body: JSON.stringify({ text: sentenceBuffer, voice: voiceId })
                 })
                 .then(res => res.blob())
                 .then(blob => setAudioQueue(prev => [...prev, URL.createObjectURL(blob)]));
@@ -345,8 +371,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
     return (
         <AppContext.Provider value={{
-            state: { user, isAuthenticated, mode, agents, activeAgentId, conversations, activeConversationId, automationTasks, avatarState, visualContext, audioLevel, customShapeFn },
-            actions: { login, logout, setMode, setActiveAgent: setActiveAgentId, addAgent, updateAgent, deleteAgent, sendMessage, setActiveConversation: setActiveConversationId, createConversation: () => setActiveConversationId(''), addTask, toggleTaskStatus, deleteTask, setAvatarState }
+            state: { user, isAuthenticated, mode, agents, activeAgentId, conversations, activeConversationId, automationTasks, avatarState, visualContext, audioLevel, customShapeFn, isListening },
+            actions: { login, logout, setMode, setActiveAgent: setActiveAgentId, addAgent, updateAgent, deleteAgent, sendMessage, setActiveConversation: setActiveConversationId, createConversation: () => setActiveConversationId(''), addTask, toggleTaskStatus, deleteTask, setAvatarState, setListening: setIsListening, speak }
         }}>
             {children}
         </AppContext.Provider>

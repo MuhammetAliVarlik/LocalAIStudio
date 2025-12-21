@@ -29,7 +29,7 @@ WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/app/workspace")
 MEMORY_DIR = os.path.join(WORKSPACE_DIR, "memory_db")
 PERSONAS_DIR = os.path.join(WORKSPACE_DIR, "personas") 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
-MODEL_NAME = "deepseek-coder" 
+MODEL_NAME = "llama3.1" 
 
 # --- INITIALIZATION SAFETY CHECKS ---
 if not os.path.exists(WORKSPACE_DIR):
@@ -45,6 +45,7 @@ if not glob.glob(os.path.join(PERSONAS_DIR, "*.json")):
         "id": "nova",
         "name": "Nova",
         "color": "#22d3ee",
+        "voice": "af_sarah",
         "traits": {"empathy": 75, "logic": 80, "creativity": 60, "humor": 40},
         "system_prompt": "You are Nova, an advanced AI assistant.",
         "map_state": {"nodes": [], "edges": []}
@@ -125,9 +126,13 @@ class PersonaConfig(BaseModel):
     id: str
     name: str
     color: str
+    voice: str = "af_sarah"
     traits: dict
     system_prompt: str
     map_state: dict = {}
+
+class BriefingRequest(BaseModel):
+    persona_id: str
 
 class FileModel(BaseModel):
     name: str
@@ -138,39 +143,65 @@ class TerminalRequest(BaseModel):
     command: str
 
 # --- BACKGROUND TASK ---
-def consolidate_memory(user_text: str, persona_id: str):
+def consolidate_memory(user_text: str, raw_persona_id: str):
     vector_store, llm = get_langchain()
     if not vector_store or not llm: return
 
-    # Simple prompt to avoid brace syntax errors
+    persona_id = "".join([c for c in raw_persona_id if c.isalnum() or c in ('-','_')]).lower()
+
+    # Prompt requesting JSON
     prompt = ChatPromptTemplate.from_template(
-        "Extract one key fact from: '{text}'. If none, output 'NO'."
+        "Analyze this user message: '{text}'.\n"
+        "If it contains a new fact about the user, project, or preferences, return a JSON object with keys: 'fact', 'label', 'emotion'.\n"
+        "If NO new fact, return {{ \"fact\": \"NO\" }}.\n"
+        "Output ONLY valid JSON."
     )
+    
     chain = prompt | llm | StrOutputParser()
 
     try:
-        fact = chain.invoke({"text": user_text}).strip()
-        if fact and "NO" not in fact and len(fact) > 5:
-            print(f"💾 Learning for [{persona_id}]: {fact}")
+        response = chain.invoke({"text": user_text}).strip()
+        
+        # Robust Parsing: Find the first '{' and last '}' to handle chatty models
+        try:
+            start_idx = response.find('{')
+            end_idx = response.rfind('}')
+            if start_idx != -1 and end_idx != -1:
+                clean_json = response[start_idx:end_idx+1]
+                data = json.loads(clean_json)
+                fact = data.get("fact", "NO")
+                label = data.get("label", "General Observation")
+                emotion = data.get("emotion", "neutral")
+            else:
+                raise ValueError("No JSON found")
+        except:
+            # Fallback: If JSON fails, check if the text itself looks like a fact
+            if "NO" not in response and len(response) < 200:
+                fact = response
+                label = "Raw Observation"
+                emotion = "neutral"
+            else:
+                fact = "NO"
+
+        if fact and "NO" not in fact and len(fact) > 3:
+            print(f"💾 [MEMORY] Saving for [{persona_id}]: {fact}")
             vector_store.add_documents([Document(
                 page_content=fact, 
                 metadata={
                     "source": "chat", 
                     "persona_id": persona_id,
                     "timestamp": datetime.datetime.now().isoformat(),
-                    "emotion": "neutral",
-                    "label": "DeepSeek Observation"
+                    "emotion": emotion,
+                    "label": label
                 }
             )])
     except Exception as e:
-        print(f"Memory Error: {e}")
+        print(f"❌ Memory Consolidation Error: {e}")
 
 # --- API ENDPOINTS ---
 
-# 1. PERSONA MANAGEMENT
 @app.get("/api/personas")
 async def list_personas():
-    """Reads all JSON files in the personas directory."""
     personas = []
     try:
         files = glob.glob(os.path.join(PERSONAS_DIR, "*.json"))
@@ -183,16 +214,13 @@ async def list_personas():
                 print(f"Skipping corrupt persona file {filepath}: {e}")
     except Exception as e:
         print(f"Error listing personas: {e}")
-        return [] # Return empty list instead of crashing
-    
+        return [] 
     return personas
 
 @app.get("/api/personas/{persona_id}")
 async def get_persona(persona_id: str):
-    # Sanitize ID to prevent path traversal
     safe_id = "".join([c for c in persona_id if c.isalnum() or c in ('-','_')]).lower()
     path = os.path.join(PERSONAS_DIR, f"{safe_id}.json")
-    
     if os.path.exists(path):
         try:
             with open(path, "r") as f: return json.load(f)
@@ -216,40 +244,41 @@ async def delete_persona(persona_id: str):
     if os.path.exists(path): os.remove(path)
     return {"status": "deleted"}
 
-# 2. MEMORY MANAGEMENT
 @app.get("/api/memory")
-async def get_memories(persona_id: str = "nova"):
+async def get_memories(persona_id: str = "nova", limit: int = 50):
+    safe_id = "".join([c for c in persona_id if c.isalnum() or c in ('-','_')]).lower()
     vector_store, _ = get_langchain()
     if not vector_store: return []
     try:
-        # ChromaDB .get() allows filtering metadata
-        data = vector_store.get(where={"persona_id": persona_id})
+        data = vector_store.get(where={"persona_id": safe_id}, limit=limit)
     except:
         return []
-
     formatted = []
     if data and data['ids']:
-        for i, _id in enumerate(data['ids']):
+        count = len(data['ids'])
+        for i in range(count):
             meta = data['metadatas'][i] if data['metadatas'] else {}
             formatted.append({
-                "id": _id,
+                "id": data['ids'][i],
                 "text": data['documents'][i],
                 "label": meta.get("label", "Memory"),
                 "emotion": meta.get("emotion", "neutral"),
                 "timestamp": meta.get("timestamp", datetime.datetime.now().isoformat()),
                 "isCore": meta.get("isCore", False)
             })
+    formatted.sort(key=lambda x: x['timestamp'])
     return formatted
 
 @app.post("/api/memory")
 async def create_memory(mem: MemoryCreate):
     vector_store, _ = get_langchain()
     if not vector_store: return Response(status_code=500)
+    safe_id = "".join([c for c in mem.persona_id if c.isalnum() or c in ('-','_')]).lower()
     new_id = f"mem_{datetime.datetime.now().timestamp()}"
     vector_store.add_documents([Document(
         page_content=mem.text,
         metadata={
-            "persona_id": mem.persona_id,
+            "persona_id": safe_id,
             "source": "manual",
             "timestamp": datetime.datetime.now().isoformat(),
             "emotion": mem.emotion,
@@ -265,12 +294,10 @@ async def update_memory(memory_id: str, update: MemoryUpdate):
     collection = vector_store._collection
     existing = collection.get(ids=[memory_id])
     if not existing['ids']: return Response(status_code=404)
-    
     current_meta = existing['metadatas'][0]
     if update.label: current_meta['label'] = update.label
     if update.emotion: current_meta['emotion'] = update.emotion
     if update.isCore is not None: current_meta['isCore'] = update.isCore
-    
     collection.update(
         ids=[memory_id],
         documents=[update.text] if update.text else None,
@@ -284,25 +311,59 @@ async def delete_memory(memory_id: str):
     vector_store.delete(ids=[memory_id])
     return {"status": "deleted"}
 
-# 3. CHAT
+@app.post("/api/briefing")
+async def generate_briefing(request: BriefingRequest):
+    vector_store, llm = get_langchain()
+    if not llm: return Response(status_code=500, content="System Offline")
+    safe_id = "".join([c for c in request.persona_id if c.isalnum() or c in ('-','_')]).lower()
+    try:
+        with open(os.path.join(PERSONAS_DIR, f"{safe_id}.json"), "r") as f:
+            persona_config = json.load(f)
+    except:
+        persona_config = {"name": "Assistant", "system_prompt": "You are a helpful assistant."}
+    retriever = vector_store.as_retriever(
+        search_kwargs={"k": 5, "filter": {"persona_id": safe_id}}
+    )
+    prompt = ChatPromptTemplate.from_template(
+        "IDENTITY: {system_prompt}\nTASK: Generate a concise 'Morning Briefing'. "
+        "Summarize recent context or wish them a productive day. Keep it under 3 sentences.\n"
+        "CONTEXT:\n{context}\nBRIEFING:"
+    )
+    chain = ({"context": retriever, "system_prompt": lambda x: persona_config.get('system_prompt', 'System Ready')} | prompt | llm | StrOutputParser())
+    try:
+        briefing = chain.invoke("recent events")
+        return {"briefing": briefing}
+    except Exception as e:
+        return {"briefing": f"Systems online. (Error: {str(e)})"}
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
     vector_store, llm = get_langchain()
     if not llm: return Response(content="System Offline", media_type="text/plain")
     
     background_tasks.add_task(consolidate_memory, request.message, request.persona_id)
-    
-    # Load Persona Config Safely
     safe_id = "".join([c for c in request.persona_id if c.isalnum() or c in ('-','_')]).lower()
+    
     try:
         with open(os.path.join(PERSONAS_DIR, f"{safe_id}.json"), "r") as f:
             persona_config = json.load(f)
     except:
         persona_config = {"system_prompt": "You are AI.", "traits": {}}
 
-    # Pre-render prompt variables to avoid LangChain confusion
     traits_str = json.dumps(persona_config.get('traits', {})).replace("{", "{{").replace("}", "}}")
-    sys_prompt_safe = persona_config.get('system_prompt', '').replace("{", "{{").replace("}", "}}")
+    sys_prompt = persona_config.get('system_prompt', '')
+
+    map_directives = []
+    if "map_state" in persona_config and "nodes" in persona_config["map_state"]:
+        for node in persona_config["map_state"]["nodes"]:
+            if node.get("type") == "directive":
+                lbl = node.get("data", {}).get("label", "")
+                if lbl: map_directives.append(f"- {lbl}")
+    
+    if map_directives:
+        sys_prompt += "\n\n### PRIME DIRECTIVES:\n" + "\n".join(map_directives)
+
+    sys_prompt_safe = sys_prompt.replace("{", "{{").replace("}", "}}")
     
     retriever = vector_store.as_retriever(
         search_kwargs={"k": 2, "filter": {"persona_id": request.persona_id}}
@@ -319,7 +380,6 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
         async for chunk in chain.astream(request.message): yield chunk
     return StreamingResponse(generate(), media_type="text/plain")
 
-# --- TOOLS ---
 @app.post("/api/architect")
 async def architect_mode(request: ArchitectRequest):
     _, llm = get_langchain()
@@ -338,7 +398,9 @@ async def text_to_speech(request: TTSRequest):
     engine = get_kokoro()
     if not engine: return Response(status_code=500)
     try:
-        samples, sample_rate = engine.create(request.text, voice=request.voice, speed=1.0, lang="en-us")
+        # Fixed: Fallback to af_sarah if empty string
+        voice_to_use = request.voice if request.voice else "af_sarah"
+        samples, sample_rate = engine.create(request.text, voice=voice_to_use, speed=1.0, lang="en-us")
         buffer = io.BytesIO()
         sf.write(buffer, samples, sample_rate, format='WAV')
         buffer.seek(0)
