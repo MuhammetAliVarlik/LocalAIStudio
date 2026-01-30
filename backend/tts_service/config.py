@@ -1,24 +1,22 @@
 import os
+from pydantic import BaseSettings
 
-class Settings:
+class Settings(BaseSettings):
+    """
+    Configuration management for the TTS Service.
+    """
     PROJECT_NAME: str = "Neural TTS Service"
-    VERSION: str = "1.0.0"
+    VERSION: str = "2.0.0"
     
-    # Model Configuration
-    # Models are stored in /opt/neural_models which is a persistent Docker volume
-    MODEL_DIR: str = os.getenv("MODEL_DIR", "/opt/neural_models")
+    # Model Paths
+    MODEL_PATH: str = os.getenv("MODEL_PATH", "/opt/neural_models/kokoro-v0_19.onnx")
+    VOICES_PATH: str = os.getenv("VOICES_PATH", "/opt/neural_models/voices.json")
     
-    # Checkpoints (Kokoro v0.19)
-    MODEL_PATH: str = os.path.join(MODEL_DIR, "kokoro-v0_19.onnx")
-    VOICES_PATH: str = os.path.join(MODEL_DIR, "voices.bin")
-    
-    # Download URLs (Official Release)
-    MODEL_URL: str = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/kokoro-v0_19.onnx"
-    VOICES_URL: str = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/voices.bin"
-    
-    # Default Voice
+    # Audio Settings
+    SAMPLE_RATE: int = 24000
     DEFAULT_VOICE: str = "af_sarah"
-    DEFAULT_SPEED: float = 1.0
-    DEFAULT_LANG: str = "en-us"
+    
+    # Performance
+    DEVICE: str = os.getenv("DEVICE", "cpu") # 'cuda' or 'cpu'
 
 settings = Settings()

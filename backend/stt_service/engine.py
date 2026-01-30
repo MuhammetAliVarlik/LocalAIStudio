@@ -1,58 +1,89 @@
-from faster_whisper import WhisperModel
-from config import settings
 import os
+import logging
+from faster_whisper import WhisperModel
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("STT_Engine")
 
 class STTEngine:
-    _instance = None
-    model = None
-
-    @classmethod
-    def get_instance(cls):
-        if cls._instance is None:
-            cls._instance = cls()
-            cls._instance.load_model()
-        return cls._instance
+    """
+    Singleton class to manage the lifecycle of the Whisper Model.
+    Ensures the model is loaded only once in the worker process.
+    """
+    
+    def __init__(self):
+        self.model = None
+        self.model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
+        self.device = os.getenv("WHISPER_DEVICE", "cuda")  # Defaults to GPU
+        # Use float16 for CUDA to save VRAM and increase speed; int8 for CPU
+        self.compute_type = "float16" if self.device == "cuda" else "int8"
+        self.download_root = "/opt/whisper_models"
 
     def load_model(self):
-        print(f"⬇️  STT: Loading Faster-Whisper ({settings.MODEL_SIZE}) on {settings.DEVICE}...")
-        
-        # download_root: Modeli kalıcı volume'e indirir
-        self.model = WhisperModel(
-            settings.MODEL_SIZE, 
-            device=settings.DEVICE, 
-            compute_type=settings.COMPUTE_TYPE,
-            download_root=settings.MODEL_PATH
-        )
-        print("✅ STT: Model Loaded & Ready.")
-
-    def transcribe(self, audio_path: str):
+        """
+        Loads the Faster-Whisper model into memory.
+        This method is idempotent; if the model is already loaded, it does nothing.
+        """
         if not self.model:
-            raise RuntimeError("Model not loaded")
+            logger.info(f"🚀 Loading Whisper Model: {self.model_size} on {self.device}...")
+            try:
+                self.model = WhisperModel(
+                    self.model_size, 
+                    device=self.device, 
+                    compute_type=self.compute_type,
+                    download_root=self.download_root
+                )
+                logger.info("✅ Whisper Model Loaded Successfully.")
+            except Exception as e:
+                logger.error(f"❌ Failed to load model: {e}")
+                raise e
 
-        # Run Inference
-        # vad_filter=True -> Sessizliği filtreler (Hallucination'ı engeller)
-        # beam_size=5 -> Daha doğru sonuç için 5 farklı olasılığı dener
-        segments_generator, info = self.model.transcribe(
-            audio_path, 
-            beam_size=5, 
-            vad_filter=settings.VAD_FILTER,
-            vad_parameters=dict(min_silence_duration_ms=500),
-            word_timestamps=True # Kelime bazlı zaman damgası
-        )
-
-        # Generator'ı listeye çevir (İşlemi başlatır)
-        segments = list(segments_generator)
+    def transcribe(self, file_path: str) -> dict:
+        """
+        Performs transcription on the given audio file.
         
-        # Full text birleştirme
-        full_text = " ".join([s.text for s in segments]).strip()
+        Args:
+            file_path (str): The absolute path to the audio file.
+            
+        Returns:
+            dict: A dictionary containing the full text, language metadata, and segments.
+        """
+        if not self.model:
+            self.load_model()
 
-        return {
-            "text": full_text,
-            "language": info.language,
-            "language_probability": info.language_probability,
-            "duration": info.duration,
-            "segments": segments
-        }
+        logger.info(f"🎙️ Transcribing file: {file_path}")
+        
+        try:
+            # beam_size=1 is faster (greedy search). vad_filter=True removes silence.
+            segments, info = self.model.transcribe(
+                file_path, 
+                beam_size=1, 
+                vad_filter=True
+            )
 
-# Global instance
-stt_engine = STTEngine.get_instance()
+            # Convert generator to list to force execution
+            segment_list = list(segments)
+
+            # Construct the response object
+            return {
+                "text": " ".join([s.text for s in segment_list]).strip(),
+                "language": info.language,
+                "language_probability": info.language_probability,
+                "duration": info.duration,
+                "segments": [
+                    {
+                        "start": s.start,
+                        "end": s.end,
+                        "text": s.text.strip()
+                    } for s in segment_list
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Error during transcription: {e}")
+            raise e
+
+# Create a global instance.
+# Note: In the API service, this instance exists but load_model is never called.
+# In the Worker service, load_model is called at startup.
+stt_engine = STTEngine()

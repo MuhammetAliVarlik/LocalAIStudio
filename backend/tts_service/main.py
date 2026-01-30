@@ -1,54 +1,76 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from engine import tts_engine
-from schemas import TTSRequest, HealthResponse
 from config import settings
+import logging
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION,
-    description="Microservice for Neural Text-to-Speech generation using Kokoro-ONNX"
-)
+# Configure Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("TTS_Service")
 
+app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
+
+# --- Schemas ---
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = settings.DEFAULT_VOICE
+    speed: float = 1.0
+    stream: bool = True
+
+class HealthResponse(BaseModel):
+    status: str
+    model_loaded: bool
+    available_voices: list
+
+# --- Lifecycle Events ---
 @app.on_event("startup")
 async def startup_event():
-    """Initialize the TTS Engine on startup."""
+    """Pre-load model on startup to prevent delay on first request."""
     try:
         tts_engine.initialize()
     except Exception as e:
-        print(f"❌ Critical Error during startup: {e}")
-        # We don't exit here to allow container inspection, but service won't work
+        logger.warning(f"Startup loading failed (will retry on request): {e}")
 
+# --- Endpoints ---
 @app.get("/health", response_model=HealthResponse)
 def health_check():
-    """Service health check."""
+    """Service health check and capabilities."""
     loaded = tts_engine.kokoro is not None
+    voices = tts_engine.get_voices() if loaded else []
     return {
-        "status": "active" if loaded else "initializing",
+        "status": "active",
         "model_loaded": loaded,
-        "available_voices": len(tts_engine.get_voices())
+        "available_voices": voices
     }
 
 @app.post("/generate")
 async def generate_speech(req: TTSRequest):
     """
     Generates audio from text.
-    Returns: audio/wav binary stream.
+    
+    Modes:
+    - Stream=True: Returns 'audio/wav' chunks immediately (Low Latency).
+    - Stream=False: Returns full audio file (for downloading).
     """
     try:
-        audio_bytes = tts_engine.generate(
-            text=req.text,
-            voice=req.voice,
-            speed=req.speed,
-            lang=req.lang
-        )
-        
-        return Response(content=audio_bytes, media_type="audio/wav")
+        if req.stream:
+            return StreamingResponse(
+                tts_engine.stream_audio(req.text, req.voice, req.speed),
+                media_type="audio/wav"
+            )
+        else:
+            # For non-streaming, we consume the generator and merge
+            # (Simplified for this example, usually streaming is preferred)
+            full_audio = b""
+            for chunk in tts_engine.stream_audio(req.text, req.voice, req.speed):
+                full_audio += chunk
+            
+            from fastapi.responses import Response
+            return Response(content=full_audio, media_type="audio/wav")
     
-    except RuntimeError as re:
-        raise HTTPException(status_code=503, detail="TTS Engine is not ready yet.")
     except Exception as e:
-        print(f"Generation Error: {e}")
+        logger.error(f"Generation Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/voices")

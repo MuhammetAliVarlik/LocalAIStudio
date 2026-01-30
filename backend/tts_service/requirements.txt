@@ -1,8 +1,12 @@
 fastapi
 uvicorn[standard]
-requests
-# Audio processing libraries
-soundfile
-kokoro-onnx
-numpy
 pydantic
+# Kokoro / ONNX Runtime
+kokoro-onnx
+soundfile
+numpy
+scipy
+# Text Processing
+phonemizer
+# Async utilities
+aiofiles

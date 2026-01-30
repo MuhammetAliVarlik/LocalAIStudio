@@ -1,71 +1,85 @@
 import os
-import shutil
+import uuid
+import aiofiles
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from engine import stt_engine
+from celery.result import AsyncResult
+from celery_stt import celery_app
 from schemas import TranscriptionResponse
-from config import settings
 
-app = FastAPI(title="Neural STT Service", version="1.0.0")
+app = FastAPI(title="Neural STT Service (Async)", version="2.0.0")
 
-@app.on_event("startup")
-def startup_event():
-    # Uygulama başlarken modeli GPU'ya yükle
-    stt_engine.load_model()
+# Define the path for shared storage. 
+# This must match the volume mount path in docker-compose.
+SHARED_VOL = os.getenv("SHARED_VOL", "/app/shared_data")
+os.makedirs(SHARED_VOL, exist_ok=True)
 
-@app.post("/transcribe", response_model=TranscriptionResponse)
-async def transcribe_audio(file: UploadFile = File(...)):
+@app.post("/transcribe/async")
+async def transcribe_audio_async(file: UploadFile = File(...)):
     """
-    Accepts audio file (wav, mp3, m4a, webm), runs Faster-Whisper, 
-    and returns text with timestamps.
-    """
-    temp_filename = f"temp_{file.filename}"
+    Endpoint for asynchronous audio transcription.
     
+    Workflow:
+    1. Receives an audio file (multipart/form-data).
+    2. Saves the file to a shared volume accessible by the worker.
+    3. Enqueues a transcription task in Celery.
+    4. Returns a task_id immediately (Non-blocking).
+    """
+    # Generate a unique filename to prevent collisions
+    file_ext = file.filename.split(".")[-1]
+    unique_filename = f"{uuid.uuid4()}.{file_ext}"
+    file_path = os.path.join(SHARED_VOL, unique_filename)
+
     try:
-        # 1. Dosyayı diske kaydet (Faster-Whisper path ister)
-        with open(temp_filename, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        # 2. Transcribe
-        result = stt_engine.transcribe(temp_filename)
-
-        # 3. Format Response (Schema'ya uygun hale getir)
-        formatted_segments = []
-        for s in result["segments"]:
-            words = []
-            if s.words:
-                words = [{"word": w.word, "start": w.start, "end": w.end, "probability": w.probability} for w in s.words]
-            
-            formatted_segments.append({
-                "id": s.id,
-                "seek": s.seek,
-                "start": s.start,
-                "end": s.end,
-                "text": s.text.strip(),
-                "words": words
-            })
-
+        # Stream the file content to the shared disk asynchronously
+        async with aiofiles.open(file_path, 'wb') as out_file:
+            while content := await file.read(1024 * 1024):  # Read in 1MB chunks
+                await out_file.write(content)
+        
+        # Send task to the Celery Worker
+        task = celery_app.send_task(
+            "tasks.transcribe_audio", 
+            args=[file_path], 
+            queue="stt_queue"
+        )
+        
         return {
-            "text": result["text"],
-            "language": result["language"],
-            "language_probability": result["language_probability"],
-            "duration": result["duration"],
-            "segments": formatted_segments
+            "task_id": task.id, 
+            "status": "processing", 
+            "message": "File queued for transcription successfully."
         }
 
     except Exception as e:
-        print(f"❌ STT Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-        
-    finally:
-        # 4. Cleanup (Temp dosyasını sil)
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
+        # Cleanup file if upload or queuing fails
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"Upload Failed: {str(e)}")
+
+@app.get("/transcribe/result/{task_id}")
+def get_transcription_result(task_id: str):
+    """
+    Polling endpoint to check the status and retrieve results of a task.
+    
+    Args:
+        task_id (str): The ID returned by the /transcribe/async endpoint.
+    """
+    task_result = AsyncResult(task_id, app=celery_app)
+    
+    response = {
+        "task_id": task_id,
+        "status": task_result.state
+    }
+
+    if task_result.state == 'SUCCESS':
+        response["data"] = task_result.result
+    elif task_result.state == 'FAILURE':
+        response["error"] = str(task_result.result)
+    
+    # 'PENDING' or 'STARTED' statuses just return the status code
+    return response
 
 @app.get("/health")
 def health_check():
-    return {
-        "status": "active", 
-        "model": settings.MODEL_SIZE, 
-        "device": settings.DEVICE,
-        "vad_enabled": settings.VAD_FILTER
-    }
+    """
+    Health check endpoint for the API service.
+    """
+    return {"status": "active", "mode": "async_producer", "shared_storage": SHARED_VOL}

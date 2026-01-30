@@ -1,14 +1,21 @@
 import os
+from pydantic import BaseSettings
 
-class Settings:
+class Settings(BaseSettings):
+    """
+    Application settings loaded from environment variables.
+    """
     PROJECT_NAME: str = "Neural LLM Service"
+    VERSION: str = "2.0.0"
     
-    # Ollama Connection
-    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_URL", "http://ollama:11434")
-    DEFAULT_MODEL: str = "llama3.2" # veya llama3.1:8b, mistral vb.
+    # Ollama Configuration
+    OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
+    DEFAULT_MODEL: str = "llama3"
     
-    # Generation Config
-    TEMPERATURE: float = 0.7
-    MAX_TOKENS: int = 2048
+    # Redis Configuration (For Conversation Memory)
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    
+    # Timeout settings
+    GENERATION_TIMEOUT: int = 60 # seconds
 
 settings = Settings()

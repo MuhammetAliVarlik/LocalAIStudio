@@ -1,8 +1,7 @@
 fastapi
 uvicorn[standard]
-sqlalchemy
 pydantic
-apscheduler
-# Queue System
+requests
 celery
 redis
+python-dotenv

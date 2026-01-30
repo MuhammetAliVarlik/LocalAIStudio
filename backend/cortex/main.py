@@ -1,46 +1,75 @@
+import logging
 import json
-import os
-import glob
-from database import engine, Base
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from memory import memory_engine
+from config import settings
 
-# Modüller
-from config import PERSONAS_DIR
-from routers import auth, chat, personas, system, tts
+# Configure Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("Cortex_Core")
 
-Base.metadata.create_all(bind=engine)
+app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
 
-app = FastAPI(title="Neural OS Cortex (Refactored)")
+class InteractionRequest(BaseModel):
+    query: str
+    session_id: str
+    enable_memory: bool = True
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@app.get("/health")
+def health_check():
+    return {"status": "active", "module": "Cortex Orchestrator"}
 
-
-# --- INIT DEFAULT PERSONA ---
-if not glob.glob(os.path.join(PERSONAS_DIR, "*.json")):
-    print("⚠️ No personas found. Creating default 'nova.json'...")
-    default_nova = {
-        "id": "nova",
-        "name": "Nova",
-        "color": "#22d3ee",
-        "voice": "af_sarah",
-        "traits": {"empathy": 75, "logic": 80, "creativity": 60, "humor": 40},
-        "system_prompt": "You are Nova, an advanced AI assistant.",
-        "map_state": {"nodes": [], "edges": []}
+@app.post("/interact")
+async def interact(req: InteractionRequest):
+    """
+    Main Orchestration Endpoint.
+    1. Retrieval: Searches Long-Term Memory (Qdrant).
+    2. Augmentation: Adds context to LLM Prompt.
+    3. Generation: Streams response from LLM Service.
+    4. Memorization: Saves the user query to memory (Async/Background ideally).
+    """
+    logger.info(f"🧠 Processing Interaction: {req.query}")
+    
+    # 1. Retrieval (RAG)
+    context_str = ""
+    if req.enable_memory:
+        relevant_memories = memory_engine.search_memory(req.query)
+        context_str = "\n".join(relevant_memories)
+    
+    # 2. Prepare Payload for LLM
+    llm_payload = {
+        "message": req.query,
+        "conversation_id": req.session_id,
+        "persona_system_prompt": f"You are Cortex, an advanced AI OS. Use this memory context if relevant: {context_str}",
+        "stream": True
     }
-    with open(os.path.join(PERSONAS_DIR, "nova.json"), "w") as f:
-        json.dump(default_nova, f, indent=2)
+    
+    # 3. Memorize the new input (Fire and Forget strategy for speed)
+    # In a real async setup, use BackgroundTasks
+    if req.enable_memory:
+        memory_engine.add_memory(req.query, {"type": "user_input"})
 
-# --- REGISTER ROUTERS ---
-app.include_router(auth.router, tags=["Authentication"])
-app.include_router(chat.router, tags=["Chat & Memory"])
-app.include_router(personas.router, tags=["Personas"])
-app.include_router(system.router, tags=["System"])
-app.include_router(tts.router, tags=["TTS"])
+    # 4. Proxy Stream from LLM Service
+    # We establish a stream to LLM and pipe it back to the client
+    return StreamingResponse(
+        proxy_stream_generator(settings.LLM_SERVICE_URL + "/chat", llm_payload),
+        media_type="text/event-stream"
+    )
 
-print("🚀 Neural Cortex is running in modular mode...")
+async def proxy_stream_generator(url: str, payload: dict):
+    """
+    Helper to proxy SSE (Server-Sent Events) from LLM Service to Client.
+    """
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        async with client.stream("POST", url, json=payload) as response:
+            async for chunk in response.aiter_bytes():
+                yield chunk
+
+@app.post("/memory/add")
+def manual_add_memory(text: str):
+    """Endpoint to manually inject knowledge."""
+    memory_engine.add_memory(text, {"source": "manual"})
+    return {"status": "success", "message": "Memory added."}

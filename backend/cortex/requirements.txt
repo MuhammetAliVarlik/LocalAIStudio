@@ -1,20 +1,12 @@
 fastapi
 uvicorn[standard]
-python-multipart
-requests
 pydantic
-python-jose[cryptography]
-passlib[bcrypt]
-bcrypt==4.0.1
-sqlalchemy
-# LangChain Stack (LLM Logic)
-langchain
-langchain-community
-langchain-ollama
-langchain-huggingface
-langchain-chroma
-chromadb
-sentence-transformers
-# System
-psutil
-pynvml
+# Async HTTP Client for Service-to-Service communication
+httpx
+# Vector Database Client
+qdrant-client
+# Lightweight, Fast Embeddings (CPU optimized)
+fastembed
+# Caching & Utils
+redis
+python-dotenv

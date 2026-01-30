@@ -10,6 +10,8 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
+    networks:
+      - neural_net
 
   # 2. API GATEWAY (Public Facing)
   api_gateway:
@@ -20,6 +22,9 @@ services:
       - llm_service
       - tts_service
       - stt_service
+      - automation_service
+    networks:
+      - neural_net
 
   # 3. AUTH SERVICE
   auth_service:
@@ -28,12 +33,38 @@ services:
     volumes:
       - ./backend/auth_service:/app
       - ./workspace_data:/app/workspace # Persist DB
+    networks:
+      - neural_net
 
-  # 4. STT SERVICE (Whisper) - GPU Optimized
+  # 4.1 STT SERVICE (API - Producer)
+  # Acts as the entry point for file uploads. It saves files to a shared volume
+  # and pushes a task to the Redis queue.
   stt_service:
     build: ./backend/stt_service
     ports: ["8003:8003"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - SHARED_VOL=/app/shared_data
     volumes:
+      - stt_shared_data:/app/shared_data
+    depends_on:
+      - redis
+    networks:
+      - neural_net
+
+  # 4.2 STT WORKER (GPU - Consumer)
+  # Consumes tasks from the queue, processes audio using GPU, and returns results.
+  stt_worker:
+    build: ./backend/stt_service
+    # Explicitly start Celery worker
+    command: celery -A celery_stt worker --loglevel=info --concurrency=1 -Q stt_queue
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - SHARED_VOL=/app/shared_data
+      - WHISPER_MODEL_SIZE=base
+      - WHISPER_DEVICE=cuda
+    volumes:
+      - stt_shared_data:/app/shared_data
       - whisper_models:/opt/whisper_models
     deploy:
       resources:
@@ -42,22 +73,119 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    depends_on:
+      - redis
+    networks:
+      - neural_net
 
   # 5. LLM SERVICE
+  # Optimized for streaming and uses Redis for persistent conversation memory.
   llm_service:
     build: ./backend/llm_service
     ports: ["8004:8004"]
     environment:
       - OLLAMA_URL=http://ollama:11434
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_LEVEL=INFO
+    depends_on:
+      - ollama
+      - redis
+    networks:
+      - neural_net
 
   # 6. TTS SERVICE
+  # Optimized for streaming audio with "Chunked Transfer Encoding".
+  # Uses a shared volume to cache common voice samples if needed.
   tts_service:
     build: ./backend/tts_service
     ports: ["8001:8001"]
+    environment:
+      - LOG_LEVEL=INFO
+      - DEVICE=cpu # Kokoro is fast enough on CPU for ONNX, keep GPU for LLM/STT
+      - USE_ONNX=true
     volumes:
       - tts_models:/opt/neural_models
+    networks:
+      - neural_net
 
-  # 7. OLLAMA ENGINE
+  # 7. AUTOMATION SERVICE (API)
+  automation_service:
+    build: ./backend/automation_service
+    ports: ["8005:8005"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    volumes:
+      - ./backend/automation_service:/app
+    networks:
+      - neural_net
+
+  # 8. FINANCE SERVICE
+  # Manages Portfolio, Watchlists, and Real-time Market Data.
+  # Uses Polars for high-performance data manipulation.
+  finance_service:
+    build: ./backend/finance_service
+    ports: ["8006:8006"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=sqlite:///./finance.db # Ready for PostgreSQL migration
+      - LOG_LEVEL=INFO
+    depends_on:
+      - redis
+    volumes:
+      - ./backend/finance_service:/app
+      - finance_data:/app/data # Persist SQLite DB
+    networks:
+      - neural_net
+
+  # 9. CELERY WORKER (General Automation)
+  celery_worker:
+    build: ./backend/automation_service
+    command: celery -A celery_app worker --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - automation_service
+    volumes:
+      - ./backend/automation_service:/app
+    networks:
+      - neural_net
+
+  # 9. CORTEX ORCHESTRATOR (The Brain)
+  # Central intelligence unit that manages context, memory, and service coordination.
+  cortex:
+    build: ./backend/cortex
+    ports: ["8000:8000"] # Exposing directly for now, or via API Gateway
+    environment:
+      - LOG_LEVEL=INFO
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      # Service Discovery URLs (Internal Docker Network)
+      - LLM_SERVICE_URL=http://llm_service:8004
+      - TTS_SERVICE_URL=http://tts_service:8001
+      - STT_SERVICE_URL=http://stt_service:8003
+      - FINANCE_SERVICE_URL=http://finance_service:8006
+    depends_on:
+      - qdrant
+      - redis
+      - llm_service
+      - tts_service
+    networks:
+      - neural_net
+
+  # 10. QDRANT (Vector Database)
+  # Stores semantic memory (embeddings) for RAG (Retrieval-Augmented Generation).
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports: ["6333:6333"]
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    networks:
+      - neural_net
+
+  # 10. OLLAMA ENGINE
   ollama:
     image: ollama/ollama:latest
     ports: ["11434:11434"]
@@ -70,8 +198,27 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    networks:
+      - neural_net
+
+  # 11. REDIS (Message Broker)
+  redis:
+    image: redis:alpine
+    ports: ["6379:6379"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - neural_net
+
+networks:
+  neural_net:
+    driver: bridge
 
 volumes:
   ollama_storage:
   tts_models:
   whisper_models:
+  redis_data:
+  stt_shared_data:
+  finance_data:
+  qdrant_storage:

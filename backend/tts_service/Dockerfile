@@ -1,30 +1,30 @@
-# Use a slim Python image for smaller footprint
+# Use slim python image
 FROM python:3.11-slim
 
+# Set working directory
 WORKDIR /app
 
-# Install system dependencies required for audio processing
-# espeak-ng: Required for phonemization
-# libsndfile1: Required for soundfile library
-RUN apt-get update && apt-get install -y \
-    espeak-ng \
+# Install system dependencies
+# 'libsndfile1' is required by soundfile/pysoundfile
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
-    curl \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a directory for persistent model storage
-# This will be mounted as a volume via docker-compose
-RUN mkdir -p /opt/neural_models
-
-# Install Python dependencies
+# Copy requirements
 COPY requirements.txt .
+
+# Install python packages
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code
+# Create directory for models
+RUN mkdir -p /opt/neural_models
+
+# Copy app code
 COPY . .
 
-# Expose port (Internal use)
+# Expose port
 EXPOSE 8001
 
-# Start the service
+# Run command
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
