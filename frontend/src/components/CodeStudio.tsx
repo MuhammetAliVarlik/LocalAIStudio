@@ -3,7 +3,7 @@ import { FileCode, Folder, Play, Save, X, Terminal as TerminalIcon, Search, Chev
 import Editor, { Monaco } from '@monaco-editor/react';
 import VoiceAvatar from './VoiceAvatar';
 import { AvatarState } from '../types';
-import { useApp } from '../context/AppContext';
+import { useAppContext } from '../context/AppContext';
 
 // --- Types ---
 interface File {
@@ -30,7 +30,7 @@ interface CodeChatMsg {
 }
 
 export const CodeStudio: React.FC = () => {
-  const { state, actions } = useApp();
+  const { state, actions } = useAppContext();
   const { avatarState, customShapeFn, visualContext, audioLevel } = state;
   const { setAvatarState } = actions;
   

@@ -4,7 +4,7 @@ import { Float, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 import { AvatarState, VisualContext, ShapeFunction } from '../types';
 import { ChevronDown } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useAppContext } from '../context/AppContext';
 import { ANIMATION_REGISTRY, animateIdle } from './avatarAnimations'; // Import Registry
 
 interface VoiceAvatarProps {
@@ -98,7 +98,7 @@ const VoxelCloud = ({ state, audioLevel, primaryColor }: { state: AvatarState, a
 };
 
 const VoiceAvatar = React.memo((props: VoiceAvatarProps) => {
-  const { state: appState, actions } = useApp();
+  const { state: appState, actions } = useAppContext();
   const { agents, activeAgentId, avatarState, audioLevel } = appState;
   const [showSelector, setShowSelector] = useState(false);
 

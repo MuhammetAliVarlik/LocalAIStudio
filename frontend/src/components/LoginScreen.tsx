@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useApp } from '../context/AppContext';
+import { useAppContext } from '../context/AppContext';
 import { AuthService } from '../api/services'; // AppContext'te register yoksa buradan çağıracağız
 import { Sparkles, ArrowRight, Lock, User, UserCircle, AlertCircle, Key, CheckSquare, Square } from 'lucide-react';
 
@@ -10,7 +10,7 @@ import { Sparkles, ArrowRight, Lock, User, UserCircle, AlertCircle, Key, CheckSq
  * Includes "Remember Me" functionality.
  */
 export const LoginScreen: React.FC = () => {
-  const { actions } = useApp();
+  const { actions } = useAppContext();
   
   // UI State
   const [mode, setMode] = useState<'LOGIN' | 'REGISTER' | 'RECOVERY'>('LOGIN');

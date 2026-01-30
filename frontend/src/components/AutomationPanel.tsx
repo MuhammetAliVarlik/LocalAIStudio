@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { Activity, CheckCircle, XCircle, Clock, Zap, Play, Pause, RefreshCw, Home, Globe, Plus, Trash2 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useAppContext } from '../context/AppContext';
 import { AutomationType, AutomationTask } from '../types';
 
 export const AutomationPanel: React.FC = () => {
-  const { state, actions } = useApp();
+  const { state, actions } = useAppContext();
   const { automationTasks } = state;
   const [activeTab, setActiveTab] = useState<AutomationType>('HOME');
   const [isModalOpen, setIsModalOpen] = useState(false);

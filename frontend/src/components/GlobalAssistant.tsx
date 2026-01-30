@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Mic, StopCircle, Sparkles, MoreVertical, Bot } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useApp } from '../context/AppContext';
+import { useAppContext } from '../context/AppContext';
 import { AvatarState } from '../types';
 
 /**
@@ -11,7 +11,7 @@ import { AvatarState } from '../types';
  * It renders the conversation history and handles text/voice input.
  */
 const GlobalAssistant: React.FC = () => {
-  const { state, actions } = useApp();
+  const { state, actions } = useAppContext();
   const { conversations, activeConversationId, activeAgentId, agents, avatarState } = state;
 
   // Local UI State

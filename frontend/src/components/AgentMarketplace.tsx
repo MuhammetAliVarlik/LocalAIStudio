@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Download, Shield, Code, PenTool, Bot, Search } from 'lucide-react';
 import { Agent } from '../types';
-import { useApp } from '../context/AppContext';
+import { useAppContext } from '../context/AppContext';
 
 const MARKET_AGENTS: Partial<Agent>[] = [
     { name: 'Python Debugger', type: 'coder', primaryColor: '#fbbf24', systemPrompt: 'Specialist in Python error tracing.', avatarUrl: 'https://images.unsplash.com/photo-1515879218367-8466d910aaa4?q=80&w=200&auto=format&fit=crop' },
@@ -13,7 +13,7 @@ const MARKET_AGENTS: Partial<Agent>[] = [
 ];
 
 export const AgentMarketplace: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-    const { actions } = useApp();
+    const { actions } = useAppContext();
 
     const handleInstall = (agent: Partial<Agent>) => {
         actions.addAgent({

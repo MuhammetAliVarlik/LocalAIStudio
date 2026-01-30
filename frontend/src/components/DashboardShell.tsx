@@ -27,13 +27,13 @@ import { Dreamscape } from './Dreamscape';
 import { FinanceVault } from './FinanceVault';
 import { SmartHome3D } from './SmartHome3D';
 import { FocusMode } from './FocusMode';
-import { GlobalAssistant } from './GlobalAssistant';
+import GlobalAssistant from './GlobalAssistant';
 import { Agent, AppMode, AvatarState, VisualContext } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useApp } from '../context/AppContext';
+import { useAppContext } from '../context/AppContext';
 
 export const DashboardShell: React.FC = () => {
-  const { state, actions } = useApp();
+  const { state, actions } = useAppContext();
   const { user, isAuthenticated, mode, agents, activeAgentId, conversations, activeConversationId, avatarState, visualContext, audioLevel, customShapeFn } = state;
   
   const [input, setInput] = useState('');

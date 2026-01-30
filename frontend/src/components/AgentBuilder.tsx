@@ -11,7 +11,7 @@ import {
   Network, Terminal, BrainCircuit, AlertTriangle, Frown, Smile, Flame, Ghost, Loader2, Mic
 } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { useApp } from '../context/AppContext'; // Import Context
+import { useAppContext } from '../context/AppContext'; // Import Context
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -352,7 +352,7 @@ export const AgentBuilder: React.FC = () => {
   const onMapConnect = useCallback((params: Connection) => setMapEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: '#52525b' } }, eds)), [setMapEdges]);
   
   // NEW: Get actions to trigger refresh
-  const { actions } = useApp();
+  const { actions } = useAppContext();
 
   useEffect(() => { fetch(`${API_URL}/api/personas`).then(r => r.json()).then(setPersonas).catch(console.error); }, []);
 

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Languages, MessageCircle, Mic, Play, Award, Globe, Book, X, Volume2, RotateCcw } from 'lucide-react';
 import VoiceAvatar from './VoiceAvatar';
 import { AvatarState, VisualContext } from '../types';
-import { useApp } from '../context/AppContext';
+import { useAppContext } from '../context/AppContext';
 
 const ScenarioCard = ({ title, lang, level, color, onClick }: { title: string, lang: string, level: string, color: string, onClick: () => void }) => (
     <div onClick={onClick} className={`glass-panel p-6 rounded-2xl border border-white/10 cursor-pointer hover:scale-[1.02] transition-all group relative overflow-hidden`}>
@@ -21,7 +21,7 @@ const ScenarioCard = ({ title, lang, level, color, onClick }: { title: string, l
 );
 
 export const LanguageCenter: React.FC = () => {
-  const { state, actions } = useApp();
+  const { state, actions } = useAppContext();
   const { avatarState } = state;
   const { setAvatarState } = actions;
 

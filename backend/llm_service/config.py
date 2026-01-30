@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     
     # Ollama Configuration
     OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
-    DEFAULT_MODEL: str = "llama3"
+    DEFAULT_MODEL: str = "llama3.2:1b"
     
     # Redis Configuration (For Conversation Memory)
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")

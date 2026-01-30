@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Play, Pause, SkipForward, Headphones, Volume2 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useAppContext } from '../context/AppContext';
 import { AppMode } from '../types';
 
 export const FocusMode: React.FC = () => {
-  const { actions } = useApp();
+  const { actions } = useAppContext();
   const [timeLeft, setTimeLeft] = useState(25 * 60); // 25 minutes
   const [isActive, setIsActive] = useState(false);
   const [soundscape, setSoundscape] = useState<'rain' | 'lofi' | 'white'>('rain');

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CloudRain, TrendingUp, Calendar, CheckSquare, Bell, MoreHorizontal, ArrowUpRight, DollarSign, Newspaper, ExternalLink, Activity, Cpu, Sparkles, Terminal } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { useApp } from '../context/AppContext';
+import { useAppContext } from '../context/AppContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -41,7 +41,7 @@ const Typewriter = ({ text }: { text: string }) => {
 };
 
 export const DailyDashboard: React.FC = () => {
-  const { state, actions } = useApp();
+  const { state, actions } = useAppContext();
   const { user, automationTasks, activeAgentId, agents } = state;
   const activeAgent = agents.find(a => a.id === activeAgentId) || agents[0];
   
