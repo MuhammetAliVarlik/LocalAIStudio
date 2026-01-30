@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-multipart
+# The optimized Whisper engine
+faster-whisper
+# Audio processing
+pydub
+numpy

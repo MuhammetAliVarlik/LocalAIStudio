@@ -11,6 +11,7 @@ import {
   Network, Terminal, BrainCircuit, AlertTriangle, Frown, Smile, Flame, Ghost, Loader2, Mic
 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useApp } from '../context/AppContext'; // Import Context
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -349,6 +350,9 @@ export const AgentBuilder: React.FC = () => {
   const [mapNodes, setMapNodes, onMapNodesChange] = useNodesState([]);
   const [mapEdges, setMapEdges, onMapEdgesChange] = useEdgesState([]);
   const onMapConnect = useCallback((params: Connection) => setMapEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: '#52525b' } }, eds)), [setMapEdges]);
+  
+  // NEW: Get actions to trigger refresh
+  const { actions } = useApp();
 
   useEffect(() => { fetch(`${API_URL}/api/personas`).then(r => r.json()).then(setPersonas).catch(console.error); }, []);
 
@@ -374,7 +378,12 @@ export const AgentBuilder: React.FC = () => {
       const payload = { ...config, id: currentPersonaId, map_state: { nodes: mapNodes, edges: mapEdges } };
       await fetch(`${API_URL}/api/personas`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
       alert("Agent Configuration Saved.");
+      
+      // Fix: Immediately refresh global agent list
       fetch(`${API_URL}/api/personas`).then(r => r.json()).then(setPersonas);
+      if (actions.refreshAgents) {
+          actions.refreshAgents();
+      }
   };
 
   const createNewAgent = () => {

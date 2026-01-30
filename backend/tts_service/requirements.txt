@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+requests
+# Audio processing libraries
+soundfile
+kokoro-onnx
+numpy
+pydantic

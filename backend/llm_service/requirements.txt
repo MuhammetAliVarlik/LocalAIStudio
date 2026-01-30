@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic
+requests
+# LangChain Core Stack
+langchain
+langchain-community
+langchain-ollama  # Ollama entegrasyonu için
+langchain-core

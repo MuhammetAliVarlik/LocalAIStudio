@@ -1,23 +1,32 @@
-import path from 'path';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'path';
 
-export default defineConfig(({ mode }) => {
-    const env = loadEnv(mode, '.', '');
-    return {
-      server: {
-        port: 3000,
-        host: '0.0.0.0',
-      },
-      plugins: [react()],
-      define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-      },
-      resolve: {
-        alias: {
-          '@': path.resolve(__dirname, '.'),
-        }
-      }
-    };
+/**
+ * Vite Configuration
+ * Configures the build tool and development server settings.
+ *
+ * Key Modifications for Docker:
+ * - Host binding (host: true) to allow external access.
+ * - File polling (usePolling: true) to ensure file changes propagate 
+ * through the Docker volume mount, fixing hot-reload issues on some OSs.
+ */
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
+  server: {
+    // Bind to all network interfaces (0.0.0.0) to allow Docker port mapping
+    host: true, 
+    port: 3000,
+    
+    // Watcher options to enforce file change detection inside Docker
+    watch: {
+      usePolling: true, // Critical: Forces polling instead of native OS events
+      interval: 100,    // Poll every 100ms for responsiveness
+    },
+  },
 });

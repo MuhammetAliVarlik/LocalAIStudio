@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+# Polars: Lightning fast DataFrames
+polars
+# Yahoo Finance API
+yfinance
+# Optimization: lxml for faster html parsing if needed
+lxml

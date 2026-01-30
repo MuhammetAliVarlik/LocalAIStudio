@@ -1,89 +1,164 @@
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Fingerprint, Lock, ChevronRight, Hexagon } from 'lucide-react';
-import { AuroraBackground } from './AuroraBackground';
 import { useApp } from '../context/AppContext';
+import { Sparkles, ArrowRight, UserPlus, Lock, User, UserCircle, AlertCircle, Key, CheckSquare, Square } from 'lucide-react';
 
+/**
+ * LoginScreen Component
+ * ---------------------
+ * Handles User Authentication, Registration, and Password Recovery.
+ * Includes "Remember Me" functionality.
+ */
 export const LoginScreen: React.FC = () => {
   const { actions } = useApp();
-  const [loading, setLoading] = useState(false);
+  
+  // UI State
+  const [mode, setMode] = useState<'LOGIN' | 'REGISTER' | 'RECOVERY'>('LOGIN');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [recoveryKeyDisplay, setRecoveryKeyDisplay] = useState<string | null>(null);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  // Form State
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [recoveryKey, setRecoveryKey] = useState(""); 
+  const [rememberMe, setRememberMe] = useState(false); // Checkbox State
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    await actions.login();
-    setLoading(false);
+    setIsLoading(true);
+    setError(null);
+
+    try {
+        if (mode === 'LOGIN') {
+            // Pass rememberMe state to the login action
+            await actions.login(username, password, rememberMe);
+        } else if (mode === 'REGISTER') {
+            const key = await actions.register(username, password, fullName);
+            setRecoveryKeyDisplay(key); 
+        } else if (mode === 'RECOVERY') {
+            const newKey = await actions.resetPassword(username, recoveryKey, password);
+            setRecoveryKeyDisplay(newKey);
+            alert("Password Reset Successful. Please Login.");
+            setMode('LOGIN');
+        }
+    } catch (err: any) {
+        setError(err.message || "Operation failed.");
+    } finally {
+        setIsLoading(false);
+    }
   };
 
+  // --- RECOVERY KEY DISPLAY (After Registration) ---
+  if (recoveryKeyDisplay && mode === 'REGISTER') {
+      return (
+          <div className="w-full h-screen flex items-center justify-center bg-black text-zinc-300">
+              <div className="max-w-md p-8 glass-panel rounded-3xl border border-white/10 bg-black/40 text-center space-y-4">
+                  <div className="mx-auto w-12 h-12 bg-green-500/20 rounded-full flex items-center justify-center text-green-400"><Key size={24}/></div>
+                  <h2 className="text-2xl font-bold text-white">Account Created</h2>
+                  <p className="text-sm">Save this Recovery Key. It is the <b>ONLY</b> way to reset your password.</p>
+                  <div className="bg-black/50 p-4 rounded-xl border border-white/10 font-mono text-cyan-400 text-lg tracking-widest select-all">
+                      {recoveryKeyDisplay}
+                  </div>
+                  <button onClick={() => setRecoveryKeyDisplay(null)} className="w-full bg-white text-black font-bold py-3 rounded-xl mt-4">I have saved it</button>
+              </div>
+          </div>
+      );
+  }
+
   return (
-    <div className="relative w-full h-screen overflow-hidden bg-black font-sans flex items-center justify-center text-white">
-      <AuroraBackground />
-      
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm z-0" />
+    <div className="w-full h-screen flex items-center justify-center bg-black relative overflow-hidden font-sans text-zinc-300">
+        {/* Background FX */}
+        <div className="absolute top-[-20%] left-[-10%] w-[600px] h-[600px] bg-cyan-500/20 rounded-full blur-[120px] animate-pulse pointer-events-none" />
+        <div className="absolute bottom-[-20%] right-[-10%] w-[500px] h-[500px] bg-purple-500/20 rounded-full blur-[100px] animate-pulse delay-1000 pointer-events-none" />
 
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.9, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="relative z-10 w-full max-w-md p-8"
-      >
-        <div className="glass-panel p-8 rounded-3xl border border-white/10 shadow-2xl relative overflow-hidden backdrop-blur-3xl bg-black/40">
-          {/* Decoration */}
-          <div className="absolute -top-10 -right-10 w-32 h-32 bg-cyan-500/20 rounded-full blur-3xl pointer-events-none" />
-          <div className="absolute -bottom-10 -left-10 w-32 h-32 bg-violet-500/20 rounded-full blur-3xl pointer-events-none" />
-
-          <div className="flex flex-col items-center mb-10">
-            <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(0,240,255,0.15)]">
-              <Hexagon className="text-cyan-400 animate-pulse" size={32} />
+        <div className="z-10 w-full max-w-md p-8 glass-panel rounded-3xl border border-white/10 bg-black/40 backdrop-blur-xl shadow-2xl flex flex-col gap-6">
+            
+            <div className="text-center space-y-2">
+                <div className="w-16 h-16 bg-gradient-to-tr from-cyan-400 to-blue-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-cyan-500/20 mb-4 animate-float"><Sparkles className="text-white w-8 h-8" /></div>
+                <h1 className="text-3xl font-bold text-white tracking-tight">
+                    {mode === 'LOGIN' ? 'Welcome Back' : mode === 'REGISTER' ? 'Join the Nexus' : 'System Recovery'}
+                </h1>
+                <p className="text-zinc-500 text-sm">
+                    {mode === 'LOGIN' ? 'Enter credentials.' : mode === 'REGISTER' ? 'Create digital identity.' : 'Enter recovery key to reset access.'}
+                </p>
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-center">Local AI OS <span className="text-cyan-400">.v2</span></h1>
-            <p className="text-slate-400 text-sm mt-2 font-mono">Secure Neural Interface</p>
-          </div>
 
-          <form onSubmit={handleLogin} className="space-y-6">
-             <div className="space-y-2">
-               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Identity</label>
-               <div className="relative">
-                 <input 
-                    type="text" 
-                    defaultValue="Architect"
-                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 pl-10 text-sm focus:border-cyan-500/50 outline-none transition-all focus:bg-black/60 text-white placeholder-slate-600 font-mono"
-                 />
-                 <Fingerprint className="absolute left-3 top-3.5 text-slate-500" size={16} />
-               </div>
-             </div>
-             
-             <div className="space-y-2">
-               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Passkey</label>
-               <div className="relative">
-                 <input 
-                    type="password" 
-                    defaultValue="password"
-                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 pl-10 text-sm focus:border-cyan-500/50 outline-none transition-all focus:bg-black/60 text-white placeholder-slate-600 font-mono"
-                 />
-                 <Lock className="absolute left-3 top-3.5 text-slate-500" size={16} />
-               </div>
-             </div>
+            {error && <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex gap-3 text-red-400 text-xs"><AlertCircle size={16} /><span>{error}</span></div>}
 
-             <button 
-                type="submit"
-                disabled={loading}
-                className="w-full group relative overflow-hidden rounded-xl bg-white text-black font-bold py-3.5 px-4 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(255,255,255,0.2)] hover:shadow-[0_0_30px_rgba(255,255,255,0.4)]"
-             >
-                <div className="absolute inset-0 bg-gradient-to-r from-cyan-400 to-blue-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-                <span className="relative z-10 flex items-center justify-center gap-2">
-                  {loading ? 'Authenticating...' : 'Initialize System'} 
-                  {!loading && <ChevronRight size={16} />}
-                </span>
-             </button>
-          </form>
+            <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+                {mode === 'REGISTER' && (
+                    <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                         <label className="text-xs font-bold text-zinc-500 uppercase ml-1">Full Name</label>
+                         <div className="relative">
+                            <UserCircle className="absolute left-3 top-3 text-zinc-500 w-5 h-5" />
+                            <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-10 py-3 text-sm text-white focus:border-cyan-500/50 outline-none" required />
+                         </div>
+                    </div>
+                )}
 
-          <div className="mt-8 pt-6 border-t border-white/5 text-center">
-             <p className="text-[10px] text-slate-600 font-mono">
-               SYSTEM STATUS: <span className="text-emerald-500">ONLINE</span> • ENCRYPTION: <span className="text-emerald-500">AES-256</span>
-             </p>
-          </div>
+                <div className="space-y-2">
+                    <label className="text-xs font-bold text-zinc-500 uppercase ml-1">Identity</label>
+                    <div className="relative">
+                        <User className="absolute left-3 top-3 text-zinc-500 w-5 h-5" />
+                        <input type="text" value={username} onChange={e => setUsername(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-10 py-3 text-sm text-white focus:border-cyan-500/50 outline-none" placeholder="Username" required />
+                    </div>
+                </div>
+                
+                {mode === 'RECOVERY' && (
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-zinc-500 uppercase ml-1">Recovery Key</label>
+                        <div className="relative">
+                            <Key className="absolute left-3 top-3 text-zinc-500 w-5 h-5" />
+                            <input type="text" value={recoveryKey} onChange={e => setRecoveryKey(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-10 py-3 text-sm text-white focus:border-cyan-500/50 outline-none" placeholder="Your saved key" required />
+                        </div>
+                    </div>
+                )}
+
+                <div className="space-y-2">
+                    <label className="text-xs font-bold text-zinc-500 uppercase ml-1">{mode === 'RECOVERY' ? 'New Password' : 'Passkey'}</label>
+                    <div className="relative">
+                        <Lock className="absolute left-3 top-3 text-zinc-500 w-5 h-5" />
+                        <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-10 py-3 text-sm text-white focus:border-cyan-500/50 outline-none" placeholder="••••••••" required />
+                    </div>
+                </div>
+
+                {/* --- REMEMBER ME CHECKBOX --- */}
+                {mode === 'LOGIN' && (
+                    <div className="flex items-center justify-between px-1">
+                        <button 
+                            type="button"
+                            onClick={() => setRememberMe(!rememberMe)}
+                            className="flex items-center gap-2 text-xs text-zinc-400 hover:text-white transition-colors group"
+                        >
+                            {rememberMe ? (
+                                <CheckSquare size={16} className="text-cyan-400" />
+                            ) : (
+                                <Square size={16} className="text-zinc-600 group-hover:text-zinc-400" />
+                            )}
+                            <span className={rememberMe ? "text-cyan-400 font-medium" : ""}>Remember Me</span>
+                        </button>
+                    </div>
+                )}
+
+                <button disabled={isLoading} className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 mt-4">
+                    {isLoading ? 'Processing...' : (
+                        <>{mode === 'LOGIN' ? 'Initialize Session' : mode === 'REGISTER' ? 'Create Identity' : 'Reset Access'} <ArrowRight size={18} /></>
+                    )}
+                </button>
+            </form>
+
+            <div className="text-center pt-2 border-t border-white/5 flex flex-col gap-2">
+                {mode === 'LOGIN' ? (
+                    <>
+                        <button onClick={() => setMode('REGISTER')} className="text-sm text-zinc-400 hover:text-white">New here? <span className="text-cyan-400 font-bold">Create Account</span></button>
+                        <button onClick={() => setMode('RECOVERY')} className="text-xs text-zinc-600 hover:text-zinc-400">Forgot Password?</button>
+                    </>
+                ) : (
+                    <button onClick={() => setMode('LOGIN')} className="text-sm text-zinc-400 hover:text-white">Return to <span className="text-cyan-400 font-bold">Login</span></button>
+                )}
+            </div>
         </div>
-      </motion.div>
     </div>
   );
 };

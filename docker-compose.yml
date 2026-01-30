@@ -1,33 +1,66 @@
+version: '3.8'
+
 services:
-  # 1. The React Frontend
+  # 1. FRONTEND
   frontend:
     build: ./frontend
-    ports:
-      - "3000:3000"
+    ports: ["3000:3000"]
     environment:
       - VITE_API_URL=http://localhost:8000
-    depends_on:
-      - cortex
-
-  # 2. The Python Backend (The "Brain")
-  cortex:
-    build: ./backend/cortex
-    ports:
-      - "8000:8000"
-    environment:
-      # FIX: Remove "/api/generate". Point only to the base URL.
-      - OLLAMA_URL=http://ollama:11434
-      - WORKSPACE_DIR=/app/workspace
     volumes:
-      - ./workspace_data:/app/workspace
-    depends_on:
-      - ollama
+      - ./frontend:/app
+      - /app/node_modules
 
-  # 3. The AI Engine (Ollama inside Docker)
+  # 2. API GATEWAY (Public Facing)
+  api_gateway:
+    build: ./backend/api_gateway
+    ports: ["8000:8000"]
+    depends_on:
+      - auth_service
+      - llm_service
+      - tts_service
+      - stt_service
+
+  # 3. AUTH SERVICE
+  auth_service:
+    build: ./backend/auth_service
+    ports: ["8002:8002"]
+    volumes:
+      - ./backend/auth_service:/app
+      - ./workspace_data:/app/workspace # Persist DB
+
+  # 4. STT SERVICE (Whisper) - GPU Optimized
+  stt_service:
+    build: ./backend/stt_service
+    ports: ["8003:8003"]
+    volumes:
+      - whisper_models:/opt/whisper_models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # 5. LLM SERVICE
+  llm_service:
+    build: ./backend/llm_service
+    ports: ["8004:8004"]
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+
+  # 6. TTS SERVICE
+  tts_service:
+    build: ./backend/tts_service
+    ports: ["8001:8001"]
+    volumes:
+      - tts_models:/opt/neural_models
+
+  # 7. OLLAMA ENGINE
   ollama:
     image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
+    ports: ["11434:11434"]
     volumes:
       - ollama_storage:/root/.ollama
     deploy:
@@ -40,3 +73,5 @@ services:
 
 volumes:
   ollama_storage:
+  tts_models:
+  whisper_models:

@@ -1,23 +1,25 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Agent, AppMode, AutomationTask, AvatarState, ChatMessage, Conversation, UserProfile, VisualContext, ShapeFunction } from '../types';
 
-// --- CONFIG ---
+/**
+ * CONFIGURATION
+ * Retrieves API URL from environment variables or defaults to localhost.
+ */
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-// --- RICH MOCK DATA (User & Tasks Only) ---
+// --- MOCK DATA (Fallback & UI Testing) ---
 const MOCK_USER: UserProfile = {
   id: 'u1',
   name: 'Architect',
   role: 'admin',
-  avatarUrl: '[https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop](https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop)'
+  avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop'
 };
 
-// Initial Agents are now fetched from backend, but we keep a fallback just in case
 const FALLBACK_AGENTS: Agent[] = [
     { 
         id: 'nova', name: 'Nova', type: 'daily', primaryColor: '#22d3ee', 
         systemPrompt: 'You are Nova, a helpful daily assistant.', 
-        avatarUrl: '[https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=400&auto=format&fit=crop](https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=400&auto=format&fit=crop)', isCustom: false,
+        avatarUrl: 'https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=400&auto=format&fit=crop', isCustom: false,
         voice: 'af_sarah'
     }
 ];
@@ -54,61 +56,100 @@ interface AppState {
 }
 
 interface AppActions {
-    login: () => Promise<void>;
+    // Authenticate user with backend (Modified to support Remember Me)
+    login: (username?: string, password?: string, rememberMe?: boolean) => Promise<void>;
+    register: (username: string, password: string, fullName: string) => Promise<string>; // Returns Recovery Key
+    resetPassword: (username: string, recoveryKey: string, newPass: string) => Promise<string>; // Returns New Key
     logout: () => void;
+    
+    // Mode & Navigation
     setMode: (mode: AppMode) => void;
+    
+    // Agent Management
     setActiveAgent: (id: string) => void;
     addAgent: (agent: Agent) => void;
     updateAgent: (agent: Agent) => void;
     deleteAgent: (id: string) => void;
+    
+    // Chat & Communications
     sendMessage: (text: string) => Promise<void>;
     setActiveConversation: (id: string) => void;
     createConversation: () => void;
+    
+    // Task Automation
     addTask: (task: AutomationTask) => void;
     toggleTaskStatus: (id: string) => void;
     deleteTask: (id: string) => void;
+    
+    // Voice & Avatar Control
     setAvatarState: (state: AvatarState) => void;
     setListening: (listening: boolean) => void;
     speak: (text: string) => Promise<void>;
 }
 
+// Create Context
 const AppContext = createContext<{ state: AppState; actions: AppActions } | null>(null);
 
-// --- PROVIDER ---
+/**
+ * AppProvider
+ * Main state container for the application. Handles Authentication, 
+ * Agent synchronization, and Real-time Voice/Chat interactions.
+ */
 export const AppProvider = ({ children }: { children: ReactNode }) => {
-    // State
-    const [isAuthenticated, setIsAuthenticated] = useState(true); 
-    const [user, setUser] = useState<UserProfile | null>({
-        id: 'dev', name: 'Architect', role: 'admin', avatarUrl: '[https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop](https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop)' 
-    });
     
+    // --- AUTH STATE ---
+    const [isAuthenticated, setIsAuthenticated] = useState(false); 
+    const [user, setUser] = useState<UserProfile | null>(null);
+    
+    // --- APP STATE ---
     const [mode, setMode] = useState<AppMode>(AppMode.VOICE);
     const [agents, setAgents] = useState<Agent[]>(FALLBACK_AGENTS);
     const [activeAgentId, setActiveAgentId] = useState<string>('nova');
     const [conversations, setConversations] = useState<Conversation[]>([INITIAL_CONVERSATION]);
     const [activeConversationId, setActiveConversationId] = useState<string>('1');
     const [automationTasks, setAutomationTasks] = useState<AutomationTask[]>(INITIAL_TASKS);
+    
+    // --- AVATAR & AUDIO STATE ---
     const [avatarState, setAvatarState] = useState<AvatarState>(AvatarState.IDLE);
     const [visualContext, setVisualContext] = useState<VisualContext>(VisualContext.DEFAULT);
     const [audioLevel, setAudioLevel] = useState(0);
     const [audioQueue, setAudioQueue] = useState<string[]>([]);
     const [isProcessingAudio, setIsProcessingAudio] = useState(false);
     const [isListening, setIsListening] = useState(false);
-    
-    // Architect State
     const [customShapeFn, setCustomShapeFn] = useState<ShapeFunction | undefined>(undefined);
 
-    // --- 1. FETCH AGENTS FROM BACKEND ---
+    /**
+     * INITIALIZATION EFFECT
+     * Checks both LocalStorage (Persistent) and SessionStorage (Temporary)
+     * to restore the user session on app load.
+     */
     useEffect(() => {
+        // Priority: Check Persistent first, then Session
+        const token = localStorage.getItem('neural_token') || sessionStorage.getItem('neural_token');
+        
+        if (token) {
+            console.log("🔹 Restoring session...");
+            // In a production app, verify token validity here via /api/users/me
+            setIsAuthenticated(true);
+            setUser(MOCK_USER);
+        }
+    }, []);
+
+    /**
+     * FETCH AGENTS EFFECT
+     * Syncs available personas from the Python backend.
+     */
+    useEffect(() => {
+        if (!isAuthenticated) return;
+
         fetch(`${API_URL}/api/personas`)
             .then(res => res.json())
             .then(data => {
                 if (Array.isArray(data) && data.length > 0) {
-                    // Map backend schema to frontend Agent type
                     const mappedAgents: Agent[] = data.map((p: any) => ({
                         id: p.id,
                         name: p.name,
-                        type: 'daily', // Default type if not in backend
+                        type: 'daily',
                         primaryColor: p.color || '#22d3ee',
                         systemPrompt: p.system_prompt,
                         avatarUrl: `https://ui-avatars.com/api/?name=${p.name}&background=random`, 
@@ -119,9 +160,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
                 }
             })
             .catch(err => console.error("Failed to load agents:", err));
-    }, []);
+    }, [isAuthenticated]);
 
-    // Audio Player
+    // --- AUDIO PLAYER LOGIC ---
     useEffect(() => {
         if (audioQueue.length > 0 && !isProcessingAudio) {
             setIsProcessingAudio(true);
@@ -150,7 +191,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         }
     }, [audioQueue, isProcessingAudio]);
 
-    // Auto-Reset Visual Context
+    // --- VISUAL CONTEXT RESET ---
     useEffect(() => {
         if ((visualContext !== VisualContext.DEFAULT || customShapeFn !== undefined) && avatarState === AvatarState.IDLE) {
             const timer = setTimeout(() => {
@@ -161,7 +202,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         }
     }, [avatarState, visualContext, customShapeFn]);
 
-    // Simulated Audio Loop
+    // --- MOCK AUDIO VISUALIZER ---
     useEffect(() => {
         const interval = setInterval(() => {
             if (avatarState === AvatarState.SPEAKING) setAudioLevel(Math.random() * 60 + 40);
@@ -171,25 +212,114 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         return () => clearInterval(interval);
     }, [avatarState]);
 
-    // Actions
-    const login = async () => {
-        return new Promise<void>((resolve) => {
-            setTimeout(() => {
-                setUser(MOCK_USER);
-                setIsAuthenticated(true);
-                resolve();
-            }, 800);
-        });
+    // ---------------- AUTH ACTIONS ----------------
+
+    /**
+     * Login Action
+     * Authenticates user and stores token based on 'rememberMe' preference.
+     */
+    const login = async (username = "Architect", password = "password", rememberMe = false) => {
+        try {
+            const formData = new FormData();
+            formData.append('username', username);
+            formData.append('password', password);
+
+            // Pass remember_me to backend query param
+            const res = await fetch(`${API_URL}/api/token?remember_me=${rememberMe}`, {
+                method: 'POST',
+                body: formData,
+            });
+
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(errData.detail || 'Authentication failed');
+            }
+
+            const data = await res.json();
+            
+            // STORAGE STRATEGY:
+            // Remember Me -> LocalStorage (Persistent)
+            // Normal      -> SessionStorage (Temporary)
+            if (rememberMe) {
+                localStorage.setItem('neural_token', data.access_token);
+                sessionStorage.removeItem('neural_token'); // Clear opposing storage
+            } else {
+                sessionStorage.setItem('neural_token', data.access_token);
+                localStorage.removeItem('neural_token'); // Clear opposing storage
+            }
+            
+            // Set User Profile
+            setUser({
+                id: username,
+                name: username,
+                role: 'admin',
+                avatarUrl: `https://ui-avatars.com/api/?name=${username}&background=random`
+            });
+            setIsAuthenticated(true);
+        } catch (e) {
+            console.error("Login Error:", e);
+            throw e;
+        }
     };
 
-    const logout = () => { setUser(null); setIsAuthenticated(false); };
+    const register = async (username: string, password: string, fullName: string) => {
+        try {
+            const res = await fetch(`${API_URL}/api/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password, full_name: fullName })
+            });
+
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(errData.detail || 'Registration failed');
+            }
+
+            const data = await res.json();
+            
+            // Auto-login after successful registration (Default: Remember Me = True)
+            await login(username, password, true);
+            
+            return data.recovery_key; 
+        } catch (e) {
+            console.error("Registration Error:", e);
+            throw e; 
+        }
+    };
+
+    const resetPassword = async (username: string, recoveryKey: string, newPass: string) => {
+        const res = await fetch(`${API_URL}/api/reset-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, recovery_key: recoveryKey, new_password: newPass })
+        });
+
+        if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.detail || "Reset failed");
+        }
+        
+        const data = await res.json();
+        return data.new_recovery_key;
+    };
+
+    /**
+     * Logout Action
+     * Clears ALL storage types to ensure complete session termination.
+     */
+    const logout = () => { 
+        localStorage.removeItem('neural_token');
+        sessionStorage.removeItem('neural_token');
+        setUser(null); 
+        setIsAuthenticated(false); 
+    };
     
-    // Agent Management
+    // ---------------- APP HELPERS ----------------
+
     const addAgent = (agent: Agent) => { setAgents(prev => [...prev, { ...agent, id: Date.now().toString(), isCustom: true }]); };
     const updateAgent = (agent: Agent) => { setAgents(prev => prev.map(a => a.id === agent.id ? agent : a)); };
     const deleteAgent = (id: string) => { setAgents(prev => prev.filter(a => a.id !== id)); if (activeAgentId === id) setActiveAgentId(agents[0]?.id || 'nova'); };
 
-    // --- SPEAK HELPER ---
     const speak = async (text: string) => {
         const currentAgent = agents.find(a => a.id === activeAgentId);
         const voiceId = (currentAgent as any)?.voice || "af_sarah";
@@ -206,7 +336,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         }
     };
 
-    // --- MAIN CHAT LOGIC ---
+    // ---------------- MAIN CHAT LOGIC ----------------
+    
     const sendMessage = async (text: string) => {
         const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', text, timestamp: new Date() };
         
@@ -225,13 +356,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
         const lowerText = text.toLowerCase().trim();
 
-        // 1. ARCHITECT MODE CHECK (3D Code Gen)
+        // 1. ARCHITECT MODE (Code Generation)
         if (lowerText.startsWith("make") || lowerText.startsWith("change") || lowerText.startsWith("create")) {
             setAvatarState(AvatarState.THINKING);
             fetch(`${API_URL}/api/architect`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt: text, model: "llama3.1" }) // Using llama for architect too
+                body: JSON.stringify({ prompt: text, model: "llama3.2:1b" }) 
             })
             .then(res => res.json())
             .then(data => {
@@ -262,7 +393,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
             return; 
         }
 
-        // 2. PRESET VISUALS
+        // 2. VISUAL CONTEXT TRIGGER
         let detectedContext = VisualContext.DEFAULT;
         if (lowerText.includes('storm')) detectedContext = VisualContext.WEATHER_THUNDER;
         else if (lowerText.includes('rain')) detectedContext = VisualContext.WEATHER_RAIN;
@@ -279,16 +410,15 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
             setCustomShapeFn(undefined); 
         }
 
-        // 3. CHAT LOGIC (PERSONA AWARE)
+        // 3. LLM INTERACTION
         try {
-            // Retrieve dynamic voice
             const currentAgent = agents.find(a => a.id === activeAgentId);
             const voiceId = (currentAgent as any)?.voice || "af_sarah";
 
             const response = await fetch(`${API_URL}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: text, model: "llama3.1", persona_id: activeAgentId })
+                body: JSON.stringify({ message: text, model: "llama3.2:1b", persona_id: activeAgentId })
             });
 
             if (!response.body) throw new Error("No response body");
@@ -314,13 +444,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
                 fullText += chunk;
                 sentenceBuffer += chunk;
 
+                // TTS Processing per sentence
                 if (sentenceBuffer.match(/[.!?]/)) {
                     const sentence = sentenceBuffer.trim();
                     if (sentence.length > 0) {
                         fetch(`${API_URL}/api/tts`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ text: sentence, voice: voiceId }) // DYNAMIC VOICE
+                            body: JSON.stringify({ text: sentence, voice: voiceId }) 
                         })
                         .then(res => res.blob())
                         .then(blob => {
@@ -331,6 +462,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
                     sentenceBuffer = ""; 
                 }
 
+                // Throttle UI updates to prevent lag
                 const now = Date.now();
                 if (now - lastUiUpdate > 50) {
                     setConversations(prev => prev.map(c => c.id === targetId ? { ...c, messages: c.messages.map(m => m.id === aiMsgId ? { ...m, text: fullText } : m) } : c));
@@ -339,6 +471,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
                 await new Promise(r => setTimeout(r, 20)); 
             }
 
+            // Flush remaining TTS buffer
             if (sentenceBuffer.trim().length > 0) {
                 fetch(`${API_URL}/api/tts`, {
                     method: 'POST',
@@ -372,13 +505,18 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     return (
         <AppContext.Provider value={{
             state: { user, isAuthenticated, mode, agents, activeAgentId, conversations, activeConversationId, automationTasks, avatarState, visualContext, audioLevel, customShapeFn, isListening },
-            actions: { login, logout, setMode, setActiveAgent: setActiveAgentId, addAgent, updateAgent, deleteAgent, sendMessage, setActiveConversation: setActiveConversationId, createConversation: () => setActiveConversationId(''), addTask, toggleTaskStatus, deleteTask, setAvatarState, setListening: setIsListening, speak }
+            actions: { login, register, resetPassword, logout, setMode, setActiveAgent: setActiveAgentId, addAgent, updateAgent, deleteAgent, sendMessage, setActiveConversation: setActiveConversationId, createConversation: () => setActiveConversationId(''), addTask, toggleTaskStatus, deleteTask, setAvatarState, setListening: setIsListening, speak }
         }}>
             {children}
         </AppContext.Provider>
     );
 };
 
+/**
+ * HOOK: useApp
+ * Exposes the AppContext to components.
+ * CRITICAL: Must be exported separately to allow import in other files.
+ */
 export const useApp = () => {
     const context = useContext(AppContext);
     if (!context) throw new Error('useApp must be used within AppProvider');

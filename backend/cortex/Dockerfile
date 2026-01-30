@@ -1,32 +1,29 @@
-# 1. Base Image (Full version for C++ libs)
-FROM python:3.11
+# Base image: Use slim variant for reduced footprint
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# 2. Install System Dependencies (Cached)
-# We group these to create a single cached layer
+# System dependencies: Install required libs and clean up to reduce layer size
 RUN apt-get update && apt-get install -y \
     espeak-ng \
     libsndfile1 \
     git \
-    wget \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Download AI Models (Cached)
-# We do this BEFORE requirements.txt so changing a library doesn't re-download 100MB+ models
-RUN mkdir -p /app/models
-RUN wget -O /app/models/kokoro-v0_19.onnx https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/kokoro-v0_19.onnx
-RUN wget -O /app/models/voices.bin https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/voices.bin
+# Model Acquisition: Download to /opt to prevent volume mount overrides during dev
+# Using /opt/neural_models ensures models persist even when ./backend/cortex is mounted to /app
+RUN mkdir -p /opt/neural_models
+RUN curl -L -o /opt/neural_models/kokoro-v0_19.onnx https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/kokoro-v0_19.onnx
+RUN curl -L -o /opt/neural_models/voices.bin https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/voices.bin
 
-# 4. Install Python Dependencies (Cached)
-# Only re-runs if requirements.txt changes
+# Python Dependencies: Copy and install requirements before source to leverage Docker cache
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# 5. Copy Source Code (Always changes last)
-# This is the only step that re-runs when you edit main.py
+# Source Code: Copy remaining application files
 COPY . .
 
-# 6. Start
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Entrypoint: Start uvicorn with hot-reload enabled for development
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
