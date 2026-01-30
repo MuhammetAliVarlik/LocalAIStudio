@@ -205,6 +205,15 @@ services:
       - redis_data:/data
     networks:
       - neural_net
+      
+  # 15. INFO SERVICE (System Monitor & News)
+  info_service:
+    build: ./backend/info_service
+    ports: ["8007:8007"]
+    environment:
+      - LOG_LEVEL=INFO
+    networks:
+      - neural_net
 
 networks:
   neural_net:
