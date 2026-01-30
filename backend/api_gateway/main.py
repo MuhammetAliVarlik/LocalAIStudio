@@ -1,27 +1,16 @@
 import httpx
 import logging
-from fastapi import FastAPI, Request, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse, JSONResponse, Response
+from fastapi import FastAPI, Request, HTTPException, status
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
-from security import verify_token
 
-# Configure Logging with standard format
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("API_Gateway")
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION,
-    docs_url="/docs",
-    openapi_url="/openapi.json"
-)
+app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
 
-# CORS Configuration
-# Allows all origins for development. In production, restrict this to specific domains.
+# CORS (Frontend Access)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,54 +19,69 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-async def forward_request(url: str, method: str, payload: dict = None, headers: dict = None, is_form_data: bool = False):
-    """
-    Generic proxy function to forward requests to downstream microservices.
-    
-    Args:
-        url (str): The target service URL.
-        method (str): HTTP method (GET, POST, etc.).
-        payload (dict): The data to send (JSON body or Form data).
-        headers (dict): HTTP headers to forward.
-        is_form_data (bool): If True, sends payload as form-data (application/x-www-form-urlencoded).
-    """
+async def forward_request(url: str, method: str, payload: dict = None, headers: dict = None):
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
             req_args = {"headers": headers}
-            
             if method == "GET":
                 req_args["params"] = payload
-            elif method in ["POST", "PUT", "PATCH"]:
-                if is_form_data:
-                    req_args["data"] = payload  # Send as form-data
-                else:
-                    req_args["json"] = payload  # Send as JSON
+            elif method in ["POST", "PUT", "PATCH", "DELETE"]:
+                req_args["json"] = payload # Send JSON to backend services
 
-            # Perform the request
-            if method == "GET":
-                resp = await client.get(url, **req_args)
-            elif method == "POST":
-                resp = await client.post(url, **req_args)
-            elif method == "PUT":
-                resp = await client.put(url, **req_args)
-            elif method == "DELETE":
-                resp = await client.delete(url, **req_args)
-            else:
-                return JSONResponse({"error": "Method not allowed"}, status_code=405)
-            
-            # Forward the downstream status code and content
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                media_type=resp.headers.get("content-type")
-            )
-
+            resp = await client.request(method, url, **req_args)
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type"))
         except httpx.ConnectError:
-            logger.error(f"Connection failed to downstream service: {url}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
-                detail="Downstream service is currently unreachable."
-            )
+            raise HTTPException(status_code=503, detail="Service unavailable")
         except Exception as e:
-            logger.error(f"Proxy internal error: {e}")
-            raise
+            logger.error(f"Gateway Error: {e}")
+            raise HTTPException(status_code=500, detail="Internal Gateway Error")
+
+# --- ROUTING ---
+
+@app.get("/health")
+def health():
+    return {"status": "active", "service": "gateway"}
+
+# Auth Service Proxy (/auth/login -> auth_service/login)
+@app.api_route("/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def auth_proxy(path: str, request: Request):
+    payload = await request.json() if request.method in ["POST", "PUT", "PATCH"] else request.query_params
+    # Construct URL: http://auth_service:8002/login (prefix removed if path is 'login')
+    # Note: Frontend sends /auth/login. 'path' variable becomes 'login'.
+    target_url = f"{settings.AUTH_SERVICE_URL}/{path}"
+    return await forward_request(target_url, request.method, payload, dict(request.headers))
+
+# Cortex Service Proxy
+@app.api_route("/cortex/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def cortex_proxy(path: str, request: Request):
+    payload = await request.json() if request.method in ["POST", "PUT", "PATCH"] else request.query_params
+    target_url = f"{settings.CORTEX_URL}/{path}"
+    return await forward_request(target_url, request.method, payload, dict(request.headers))
+
+# --- INFO SERVICE PROXY ---
+# Frontend: /info/system/stats -> Gateway -> Info Service: /system/stats
+@app.api_route("/info/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def info_proxy(path: str, request: Request):
+    """
+    Routes requests starting with /info/ to the Info Service.
+    Target: http://info_service:8007/{path}
+    """
+    # Gelen isteğin payload'ını veya query parametrelerini al
+    if request.method in ["POST", "PUT", "PATCH"]:
+        try:
+            payload = await request.json()
+        except:
+            payload = {}
+    else:
+        payload = request.query_params
+
+    # Hedef URL'i oluştur
+    target_url = f"{settings.INFO_SERVICE_URL}/{path}"
+    
+    # İsteği yönlendir
+    return await forward_request(
+        url=target_url,
+        method=request.method,
+        payload=payload,
+        headers=dict(request.headers)
+    )

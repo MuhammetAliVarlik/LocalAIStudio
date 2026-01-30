@@ -1,164 +1,104 @@
-from fastapi import APIRouter, BackgroundTasks, Response
-from fastapi.responses import StreamingResponse
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.documents import Document
-import os
+import logging
+import httpx
 import json
-import datetime
+from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
+from typing import AsyncGenerator
 
-from schemas import ChatRequest, MemoryCreate, MemoryUpdate, BriefingRequest, ArchitectRequest
-from services.llm_engine import get_langchain, consolidate_memory
-from config import PERSONAS_DIR
+# Local Imports
+from config import settings
+from memory import memory_engine
+from schemas import ChatRequest
+
+# Configure Logger
+logger = logging.getLogger("Cortex_Chat_Router")
 
 router = APIRouter()
 
+async def stream_generator(url: str, payload: dict) -> AsyncGenerator[bytes, None]:
+    """
+    Proxies the streaming response from the downstream LLM Service to the client.
+    Handles connection timeouts and stream iteration.
+    """
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            async with client.stream("POST", url, json=payload) as response:
+                # Check for non-200 status codes immediately
+                if response.status_code != 200:
+                    error_msg = f"LLM Service returned status: {response.status_code}"
+                    logger.error(error_msg)
+                    yield json.dumps({"error": error_msg}).encode("utf-8")
+                    return
+
+                # Stream the content chunk by chunk
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+                    
+        except httpx.ConnectError:
+            logger.error(f"Failed to connect to LLM Service at {url}")
+            yield json.dumps({"error": "LLM Service Unreachable"}).encode("utf-8")
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            yield json.dumps({"error": "Internal Stream Error"}).encode("utf-8")
+
 @router.post("/api/chat")
-async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
-    vector_store, llm = get_langchain()
-    if not llm: return Response(content="System Offline", media_type="text/plain")
+async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
+    """
+    Central Orchestration Endpoint for Chat.
     
-    background_tasks.add_task(consolidate_memory, request.message, request.persona_id)
-    safe_id = "".join([c for c in request.persona_id if c.isalnum() or c in ('-','_')]).lower()
-    
+    Workflow:
+    1. Retrieve relevant context from Semantic Memory (RAG).
+    2. Construct the system prompt based on Persona and Context.
+    3. Delegate the inference task to the LLM Service (via Streaming).
+    4. Asynchronously save the user's input to memory.
+    """
+    logger.info(f"📨 Incoming Chat Request | Session: {request.session_id} | Persona: {request.persona_id}")
+
     try:
-        with open(os.path.join(PERSONAS_DIR, f"{safe_id}.json"), "r") as f:
-            persona_config = json.load(f)
-    except:
-        persona_config = {"system_prompt": "You are AI.", "traits": {}}
+        # --- 1. Memory Retrieval (RAG) ---
+        context_str = ""
+        if request.enable_memory:
+            # Fetch top 3 relevant memories
+            memories = memory_engine.search_memory(request.message, limit=3)
+            if memories:
+                context_str = "\n".join([f"- {m}" for m in memories])
+                logger.info(f"📚 RAG: Injected {len(memories)} memory fragments.")
 
-    traits_str = json.dumps(persona_config.get('traits', {})).replace("{", "{{").replace("}", "}}")
-    sys_prompt = persona_config.get('system_prompt', '')
+        # --- 2. Prompt Construction ---
+        # Base prompt could be fetched from a database in the future.
+        base_system_prompt = (
+            f"You are {request.persona_id.capitalize()}, an advanced AI assistant. "
+            "Use the provided context to answer accurately."
+        )
 
-    map_directives = []
-    if "map_state" in persona_config and "nodes" in persona_config["map_state"]:
-        for node in persona_config["map_state"]["nodes"]:
-            if node.get("type") == "directive":
-                lbl = node.get("data", {}).get("label", "")
-                if lbl: map_directives.append(f"- {lbl}")
-    
-    if map_directives:
-        sys_prompt += "\n\n### PRIME DIRECTIVES (OVERRIDE):\n" + "\n".join(map_directives)
+        final_system_prompt = base_system_prompt
+        if context_str:
+            final_system_prompt += f"\n\n### RELEVANT MEMORY CONTEXT:\n{context_str}"
 
-    sys_prompt_safe = sys_prompt.replace("{", "{{").replace("}", "}}")
-    
-    retriever = vector_store.as_retriever(
-        search_kwargs={"k": 2, "filter": {"persona_id": request.persona_id}}
-    )
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", f"IDENTITY: {sys_prompt_safe}\nSTATS: {traits_str}\n\nCONTEXT:\n{{context}}"),
-        ("user", "{question}")
-    ])
-    
-    chain = ({"context": retriever, "question": RunnablePassthrough()} | prompt | llm | StrOutputParser())
-
-    async def generate():
-        async for chunk in chain.astream(request.message): yield chunk
-    return StreamingResponse(generate(), media_type="text/plain")
-
-@router.get("/api/memory")
-async def get_memories(persona_id: str = "nova", limit: int = 50):
-    safe_id = "".join([c for c in persona_id if c.isalnum() or c in ('-','_')]).lower()
-    vector_store, _ = get_langchain()
-    if not vector_store: return []
-    try:
-        data = vector_store.get(where={"persona_id": safe_id}, limit=limit)
-    except:
-        return []
-    formatted = []
-    if data and data['ids']:
-        count = len(data['ids'])
-        for i in range(count):
-            meta = data['metadatas'][i] if data['metadatas'] else {}
-            formatted.append({
-                "id": data['ids'][i],
-                "text": data['documents'][i],
-                "label": meta.get("label", "Memory"),
-                "emotion": meta.get("emotion", "neutral"),
-                "timestamp": meta.get("timestamp", datetime.datetime.now().isoformat()),
-                "isCore": meta.get("isCore", False)
-            })
-    formatted.sort(key=lambda x: x['timestamp'])
-    return formatted
-
-@router.post("/api/memory")
-async def create_memory(mem: MemoryCreate):
-    vector_store, _ = get_langchain()
-    if not vector_store: return Response(status_code=500)
-    safe_id = "".join([c for c in mem.persona_id if c.isalnum() or c in ('-','_')]).lower()
-    new_id = f"mem_{datetime.datetime.now().timestamp()}"
-    vector_store.add_documents([Document(
-        page_content=mem.text,
-        metadata={
-            "persona_id": safe_id,
-            "source": "manual",
-            "timestamp": datetime.datetime.now().isoformat(),
-            "emotion": mem.emotion,
-            "label": mem.label,
-            "isCore": False
+        # --- 3. Construct Payload for LLM Service ---
+        llm_payload = {
+            "message": request.message,
+            "conversation_id": request.session_id,
+            "persona_system_prompt": final_system_prompt,
+            "stream": True
         }
-    )], ids=[new_id])
-    return {"status": "created", "id": new_id}
 
-@router.patch("/api/memory/{memory_id}")
-async def update_memory(memory_id: str, update: MemoryUpdate):
-    vector_store, _ = get_langchain()
-    collection = vector_store._collection
-    existing = collection.get(ids=[memory_id])
-    if not existing['ids']: return Response(status_code=404)
-    current_meta = existing['metadatas'][0]
-    if update.label: current_meta['label'] = update.label
-    if update.emotion: current_meta['emotion'] = update.emotion
-    if update.isCore is not None: current_meta['isCore'] = update.isCore
-    collection.update(
-        ids=[memory_id],
-        documents=[update.text] if update.text else None,
-        metadatas=[current_meta]
-    )
-    return {"status": "updated"}
+        # --- 4. Background Task: Save User Input to Memory ---
+        # We use BackgroundTasks to avoid blocking the response stream.
+        if request.enable_memory:
+            background_tasks.add_task(
+                memory_engine.add_memory, 
+                request.message, 
+                {"role": "user", "session_id": request.session_id}
+            )
 
-@router.delete("/api/memory/{memory_id}")
-async def delete_memory(memory_id: str):
-    vector_store, _ = get_langchain()
-    vector_store.delete(ids=[memory_id])
-    return {"status": "deleted"}
+        # --- 5. Proxy Stream to Client ---
+        target_url = f"{settings.LLM_SERVICE_URL}/chat"
+        return StreamingResponse(
+            stream_generator(target_url, llm_payload),
+            media_type="text/event-stream"
+        )
 
-@router.post("/api/briefing")
-async def generate_briefing(request: BriefingRequest):
-    vector_store, llm = get_langchain()
-    if not llm: return Response(status_code=500, content="System Offline")
-    safe_id = "".join([c for c in request.persona_id if c.isalnum() or c in ('-','_')]).lower()
-    try:
-        with open(os.path.join(PERSONAS_DIR, f"{safe_id}.json"), "r") as f:
-            persona_config = json.load(f)
-    except:
-        persona_config = {"name": "Assistant", "system_prompt": "You are a helpful assistant."}
-    retriever = vector_store.as_retriever(
-        search_kwargs={"k": 5, "filter": {"persona_id": safe_id}}
-    )
-    prompt = ChatPromptTemplate.from_template(
-        "IDENTITY: {system_prompt}\nTASK: Generate a concise 'Morning Briefing'. "
-        "Summarize recent context or wish them a productive day. Keep it under 3 sentences.\n"
-        "CONTEXT:\n{context}\nBRIEFING:"
-    )
-    chain = ({"context": retriever, "system_prompt": lambda x: persona_config.get('system_prompt', 'System Ready')} | prompt | llm | StrOutputParser())
-    try:
-        briefing = chain.invoke("recent events")
-        return {"briefing": briefing}
     except Exception as e:
-        return {"briefing": f"Systems online. (Error: {str(e)})"}
-
-@router.post("/api/architect")
-async def architect_mode(request: ArchitectRequest):
-    _, llm = get_langchain()
-    if not llm: return Response(status_code=500)
-    prompt = ChatPromptTemplate.from_template("Generate JS 3D code. Req: {input}. Vars: i, count, time. End with 'return {{ x, y, z, color }};'")
-    chain = prompt | llm | StrOutputParser()
-    try:
-        raw = chain.invoke({"input": request.prompt})
-        clean = raw.replace("```javascript", "").replace("```", "").strip()
-        if "return" not in clean: clean = "return { x: 0, y: 0, z: 0, color: 'white' };"
-        return {"code": clean}
-    except Exception as e: return Response(status_code=500, content=str(e))
+        logger.error(f"Critical Orchestration Error: {e}")
+        raise HTTPException(status_code=500, detail="Orchestration Layer Failed")

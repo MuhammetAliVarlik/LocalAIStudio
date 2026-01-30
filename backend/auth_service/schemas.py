@@ -2,8 +2,12 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
-# --- TOKEN SCHEMAS ---
+# ==========================================
+# AUTHENTICATION & TOKEN SCHEMAS
+# ==========================================
+
 class Token(BaseModel):
+    """Schema for JWT Token response."""
     access_token: str
     refresh_token: str
     token_type: str
@@ -11,7 +15,18 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     username: Optional[str] = None
 
-# --- USER SCHEMAS ---
+class LoginRequest(BaseModel):
+    """
+    Schema for User Login (JSON Body).
+    Frontend sends JSON, not Form-Data.
+    """
+    username: str
+    password: str
+
+# ==========================================
+# USER SCHEMAS
+# ==========================================
+
 class UserBase(BaseModel):
     username: str
     full_name: Optional[str] = None
@@ -29,13 +44,19 @@ class UserResponse(UserBase):
     class Config:
         from_attributes = True
 
-# --- RECOVERY ---
+# ==========================================
+# RECOVERY SCHEMAS
+# ==========================================
+
 class PasswordResetRequest(BaseModel):
     username: str
     recovery_key: str
     new_password: str
 
-# --- PERSONAS ---
+# ==========================================
+# PERSONA SCHEMAS
+# ==========================================
+
 class PersonaBase(BaseModel):
     id: str
     name: str

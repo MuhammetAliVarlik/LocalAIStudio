@@ -11,6 +11,7 @@ interface StreamOptions {
 /**
  * Custom Hook to handle Streaming Chat Responses (SSE).
  * Uses the native Fetch API because Axios does not support streaming in the browser easily.
+ * Refactored to match Cortex V2 API Standards.
  */
 export const useChatStream = () => {
   const [isLoading, setIsLoading] = useState(false);
@@ -20,11 +21,13 @@ export const useChatStream = () => {
    * Initiates a streaming connection to the Cortex Service.
    * @param message User's input message
    * @param sessionId Current Conversation ID
+   * @param personaId The AI persona being talked to (e.g., 'nova', 'jarvis')
    * @param options Callbacks for handling data chunks
    */
   const streamMessage = useCallback(async (
     message: string, 
     sessionId: string,
+    personaId: string, // <-- Added persona_id support
     options: StreamOptions
   ) => {
     setIsLoading(true);
@@ -33,21 +36,30 @@ export const useChatStream = () => {
 
     try {
       // 1. Initiate Fetch Request
-      const response = await fetch(`${API_URL}/cortex/interact`, {
+      // NOTE: Updated endpoint from '/interact' to '/api/chat'
+      const response = await fetch(`${API_URL}/cortex/api/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          query: message,
+          message: message, // <-- Renamed 'query' to 'message' to match Pydantic schema
           session_id: sessionId,
+          persona_id: personaId,
           enable_memory: true
         })
       });
 
       if (!response.ok) {
-        throw new Error(`Stream Error: ${response.statusText}`);
+        // Try to read the error message from JSON if possible
+        let errorMsg = response.statusText;
+        try {
+            const errorBody = await response.json();
+            if(errorBody.detail) errorMsg = errorBody.detail;
+        } catch(e) { /* ignore json parse error */ }
+        
+        throw new Error(`Stream Error (${response.status}): ${errorMsg}`);
       }
 
       if (!response.body) {
@@ -68,35 +80,18 @@ export const useChatStream = () => {
         const chunk = decoder.decode(value, { stream: true });
         buffer += chunk;
 
-        // Process complete lines from buffer (SSE format: "data: ...\n\n")
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-        for (const line of lines) {
-          const trimmedLine = line.trim();
-          if (!trimmedLine.startsWith('data: ')) continue;
-
-          const jsonStr = trimmedLine.replace('data: ', '').trim();
-          
-          if (jsonStr === '[DONE]') {
-            // End of Stream signal
-            continue;
-          }
-
-          try {
-            const parsed = JSON.parse(jsonStr);
-            // Verify content exists and is not empty
-            if (parsed.content) {
-              options.onChunk(parsed.content);
-            }
-          } catch (e) {
-            console.warn('Failed to parse SSE JSON chunk:', jsonStr);
-          }
-        }
+        // Backend doesn't send "data: " prefix anymore if we are using raw bytes generator
+        // BUT if we use SSE format (event-stream), we need to handle it.
+        // Our new backend proxy just streams chunks directly or JSON chunks.
+        // Let's assume standard text stream for now, but handle potential JSON chunks if the LLM service sends them.
+        
+        // Simple text streaming logic (Update this if backend sends rigorous SSE events)
+        options.onChunk(chunk); 
       }
 
     } catch (err: any) {
       const errorMessage = err.message || 'Unknown streaming error';
+      console.error("Chat Stream Error:", err);
       setError(errorMessage);
       if (options.onError) options.onError(errorMessage);
     } finally {

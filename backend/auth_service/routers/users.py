@@ -7,10 +7,11 @@ import schemas, database, crud, models
 from config import settings
 
 router = APIRouter(prefix="/users", tags=["Users"])
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Update tokenUrl to match our new JSON login endpoint path
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(database.get_db)):
-    """Middleware to validate Access Token."""
     credentials_exception = HTTPException(
         status_code=401, detail="Could not validate credentials", headers={"WWW-Authenticate": "Bearer"}
     )

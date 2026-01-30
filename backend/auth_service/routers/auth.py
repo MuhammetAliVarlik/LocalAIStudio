@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 
@@ -21,16 +20,23 @@ def register(user: schemas.UserCreate, db: Session = Depends(database.get_db)):
         "message": "Store this recovery key safely."
     }
 
-@router.post("/token", response_model=schemas.Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
-    user = crud.get_user_by_username(db, form_data.username)
-    if not user or not security.verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Incorrect username or password")
+@router.post("/login", response_model=schemas.Token)
+def login(user_credentials: schemas.LoginRequest, db: Session = Depends(database.get_db)):
+    """
+    Authenticates a user via JSON payload (Username & Password).
+    Matches Frontend's JSON request.
+    """
+    user = crud.get_user_by_username(db, user_credentials.username)
+    if not user or not security.verify_password(user_credentials.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Incorrect username or password"
+        )
     
     if user.disabled:
         raise HTTPException(status_code=403, detail="User account is disabled")
 
-    # Update Audit Log
+    # Update Last Login
     crud.update_last_login(db, user.username)
 
     # Generate Tokens
@@ -45,7 +51,6 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
 @router.post("/refresh", response_model=schemas.Token)
 def refresh_token(token: str, db: Session = Depends(database.get_db)):
-    """Generates a new Access Token using a valid Refresh Token."""
     credentials_exception = HTTPException(
         status_code=401, detail="Could not validate credentials", headers={"WWW-Authenticate": "Bearer"}
     )
@@ -66,7 +71,7 @@ def refresh_token(token: str, db: Session = Depends(database.get_db)):
     
     return {
         "access_token": new_access_token,
-        "refresh_token": token, # Return existing refresh token (or rotate it)
+        "refresh_token": token,
         "token_type": "bearer"
     }
 
