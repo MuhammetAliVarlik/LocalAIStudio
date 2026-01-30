@@ -23,3 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 workspace_data/
+
+# Python
+__pycache__/
+*.pyc
