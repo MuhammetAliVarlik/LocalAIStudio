@@ -21,7 +21,11 @@ export enum AvatarState {
   IDLE = 'IDLE',
   LISTENING = 'LISTENING',
   THINKING = 'THINKING',
-  SPEAKING = 'SPEAKING'
+  SPEAKING = 'SPEAKING',
+  // --- NEW STATES ---
+  SLEEPING = 'SLEEPING',   // Low energy, floor level
+  COMPUTING = 'COMPUTING', // Matrix/Grid like movement
+  EXCITED = 'EXCITED'      // Fast, chaotic jitter
 }
 
 export enum VisualContext {

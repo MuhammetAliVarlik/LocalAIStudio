@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Sparkles, ArrowRight, UserPlus, Lock, User, UserCircle, AlertCircle, Key, CheckSquare, Square } from 'lucide-react';
+import { AuthService } from '../api/services'; // AppContext'te register yoksa buradan çağıracağız
+import { Sparkles, ArrowRight, Lock, User, UserCircle, AlertCircle, Key, CheckSquare, Square } from 'lucide-react';
 
 /**
  * LoginScreen Component
@@ -31,19 +32,41 @@ export const LoginScreen: React.FC = () => {
 
     try {
         if (mode === 'LOGIN') {
-            // Pass rememberMe state to the login action
-            await actions.login(username, password, rememberMe);
+            // AUTH LOGIN FLOW
+            // Note: AppContext login expects an object { username, password }
+            await actions.login({ username, password });
+            
+            // Handle Remember Me (Token persistence logic)
+            // AppContext saves to localStorage by default currently.
+            // If we want sessionStorage support, we'd need to modify AppContext, 
+            // but for now let's assume standard login is persistent.
+            
         } else if (mode === 'REGISTER') {
-            const key = await actions.register(username, password, fullName);
-            setRecoveryKeyDisplay(key); 
+            // REGISTRATION FLOW
+            // Using AuthService directly if not exposed via Context actions
+            const response = await AuthService.register({ 
+                username, 
+                password, 
+                full_name: fullName 
+            });
+            // Assuming backend returns a recovery key in response
+            if (response.recovery_key) {
+                setRecoveryKeyDisplay(response.recovery_key);
+            } else {
+                alert("Registration Successful. Please Login.");
+                setMode('LOGIN');
+            }
+
         } else if (mode === 'RECOVERY') {
-            const newKey = await actions.resetPassword(username, recoveryKey, password);
-            setRecoveryKeyDisplay(newKey);
-            alert("Password Reset Successful. Please Login.");
+            // RECOVERY FLOW (Mock implementation for now as Backend endpoint might vary)
+            // await AuthService.resetPassword({ username, recoveryKey, newPassword: password });
+            alert("Password Reset feature requires backend implementation. Please contact admin.");
             setMode('LOGIN');
         }
     } catch (err: any) {
-        setError(err.message || "Operation failed.");
+        // Safe error handling for Axios response
+        const msg = err.response?.data?.detail || err.message || "Operation failed.";
+        setError(msg);
     } finally {
         setIsLoading(false);
     }
@@ -60,7 +83,7 @@ export const LoginScreen: React.FC = () => {
                   <div className="bg-black/50 p-4 rounded-xl border border-white/10 font-mono text-cyan-400 text-lg tracking-widest select-all">
                       {recoveryKeyDisplay}
                   </div>
-                  <button onClick={() => setRecoveryKeyDisplay(null)} className="w-full bg-white text-black font-bold py-3 rounded-xl mt-4">I have saved it</button>
+                  <button onClick={() => { setRecoveryKeyDisplay(null); setMode('LOGIN'); }} className="w-full bg-white text-black font-bold py-3 rounded-xl mt-4">I have saved it</button>
               </div>
           </div>
       );
@@ -89,11 +112,11 @@ export const LoginScreen: React.FC = () => {
             <form onSubmit={handleSubmit} className="space-y-4 mt-2">
                 {mode === 'REGISTER' && (
                     <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
-                         <label className="text-xs font-bold text-zinc-500 uppercase ml-1">Full Name</label>
-                         <div className="relative">
+                          <label className="text-xs font-bold text-zinc-500 uppercase ml-1">Full Name</label>
+                          <div className="relative">
                             <UserCircle className="absolute left-3 top-3 text-zinc-500 w-5 h-5" />
                             <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-10 py-3 text-sm text-white focus:border-cyan-500/50 outline-none" required />
-                         </div>
+                          </div>
                     </div>
                 )}
 

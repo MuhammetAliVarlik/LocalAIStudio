@@ -7,3 +7,4 @@ python-jose[cryptography]
 passlib[bcrypt]
 # CRITICAL: Fix for passlib conflict
 bcrypt==4.0.1
+pydantic-settings

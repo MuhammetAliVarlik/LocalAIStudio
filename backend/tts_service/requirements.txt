@@ -10,3 +10,4 @@ scipy
 phonemizer
 # Async utilities
 aiofiles
+pydantic-settings

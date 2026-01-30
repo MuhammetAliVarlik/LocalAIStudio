@@ -1,4 +1,9 @@
 fastapi
 uvicorn[standard]
-requests
+# System Monitoring
+psutil
+pynvml
+# Web Search & News (Existing)
 duckduckgo-search
+requests
+pydantic-settings

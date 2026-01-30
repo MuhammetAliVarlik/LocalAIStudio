@@ -10,3 +10,4 @@ fastembed
 # Caching & Utils
 redis
 python-dotenv
+pydantic-settings

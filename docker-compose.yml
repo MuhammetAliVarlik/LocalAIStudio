@@ -13,16 +13,17 @@ services:
     networks:
       - neural_net
 
-  # 2. API GATEWAY (Public Facing)
+  # 2. API GATEWAY (Public Facing Entry Point)
+  # Tüm trafik buradan geçer. Auth ve Cortex'e yönlendirir.
   api_gateway:
     build: ./backend/api_gateway
     ports: ["8000:8000"]
+    environment:
+      - AUTH_SERVICE_URL=http://auth_service:8002
+      - CORTEX_URL=http://cortex:8000
     depends_on:
       - auth_service
-      - llm_service
-      - tts_service
-      - stt_service
-      - automation_service
+      - cortex
     networks:
       - neural_net
 
@@ -36,9 +37,32 @@ services:
     networks:
       - neural_net
 
-  # 4.1 STT SERVICE (API - Producer)
-  # Acts as the entry point for file uploads. It saves files to a shared volume
-  # and pushes a task to the Redis queue.
+  # 4. CORTEX ORCHESTRATOR (The Brain)
+  # Diğer tüm servisleri yönetir.
+  cortex:
+    build: ./backend/cortex
+    # Host portunu 8008 yaptık (Gateway 8000 ile çakışmasın diye).
+    # Docker içi port 8000'dir.
+    ports: ["8008:8000"] 
+    environment:
+      - LOG_LEVEL=INFO
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      # Service Discovery URLs (Internal)
+      - LLM_SERVICE_URL=http://llm_service:8004
+      - TTS_SERVICE_URL=http://tts_service:8001
+      - STT_SERVICE_URL=http://stt_service:8003
+      - FINANCE_SERVICE_URL=http://finance_service:8006
+    depends_on:
+      - qdrant
+      - redis
+      - llm_service
+      - tts_service
+      - finance_service
+    networks:
+      - neural_net
+
+  # 5. STT SERVICE (API - Producer)
   stt_service:
     build: ./backend/stt_service
     ports: ["8003:8003"]
@@ -52,11 +76,9 @@ services:
     networks:
       - neural_net
 
-  # 4.2 STT WORKER (GPU - Consumer)
-  # Consumes tasks from the queue, processes audio using GPU, and returns results.
+  # 6. STT WORKER (GPU - Consumer)
   stt_worker:
     build: ./backend/stt_service
-    # Explicitly start Celery worker
     command: celery -A celery_stt worker --loglevel=info --concurrency=1 -Q stt_queue
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -78,8 +100,7 @@ services:
     networks:
       - neural_net
 
-  # 5. LLM SERVICE
-  # Optimized for streaming and uses Redis for persistent conversation memory.
+  # 7. LLM SERVICE
   llm_service:
     build: ./backend/llm_service
     ports: ["8004:8004"]
@@ -93,22 +114,36 @@ services:
     networks:
       - neural_net
 
-  # 6. TTS SERVICE
-  # Optimized for streaming audio with "Chunked Transfer Encoding".
-  # Uses a shared volume to cache common voice samples if needed.
+  # 8. TTS SERVICE
   tts_service:
     build: ./backend/tts_service
     ports: ["8001:8001"]
     environment:
       - LOG_LEVEL=INFO
-      - DEVICE=cpu # Kokoro is fast enough on CPU for ONNX, keep GPU for LLM/STT
+      - DEVICE=cpu
       - USE_ONNX=true
     volumes:
       - tts_models:/opt/neural_models
     networks:
       - neural_net
 
-  # 7. AUTOMATION SERVICE (API)
+  # 9. FINANCE SERVICE
+  finance_service:
+    build: ./backend/finance_service
+    ports: ["8006:8006"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=sqlite:///./finance.db
+      - LOG_LEVEL=INFO
+    depends_on:
+      - redis
+    volumes:
+      - ./backend/finance_service:/app
+      - finance_data:/app/data
+    networks:
+      - neural_net
+
+  # 10. AUTOMATION SERVICE (API)
   automation_service:
     build: ./backend/automation_service
     ports: ["8005:8005"]
@@ -121,25 +156,7 @@ services:
     networks:
       - neural_net
 
-  # 8. FINANCE SERVICE
-  # Manages Portfolio, Watchlists, and Real-time Market Data.
-  # Uses Polars for high-performance data manipulation.
-  finance_service:
-    build: ./backend/finance_service
-    ports: ["8006:8006"]
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=sqlite:///./finance.db # Ready for PostgreSQL migration
-      - LOG_LEVEL=INFO
-    depends_on:
-      - redis
-    volumes:
-      - ./backend/finance_service:/app
-      - finance_data:/app/data # Persist SQLite DB
-    networks:
-      - neural_net
-
-  # 9. CELERY WORKER (General Automation)
+  # 11. CELERY WORKER (General Automation)
   celery_worker:
     build: ./backend/automation_service
     command: celery -A celery_app worker --loglevel=info
@@ -153,30 +170,7 @@ services:
     networks:
       - neural_net
 
-  # 9. CORTEX ORCHESTRATOR (The Brain)
-  # Central intelligence unit that manages context, memory, and service coordination.
-  cortex:
-    build: ./backend/cortex
-    ports: ["8000:8000"] # Exposing directly for now, or via API Gateway
-    environment:
-      - LOG_LEVEL=INFO
-      - QDRANT_URL=http://qdrant:6333
-      - REDIS_URL=redis://redis:6379/0
-      # Service Discovery URLs (Internal Docker Network)
-      - LLM_SERVICE_URL=http://llm_service:8004
-      - TTS_SERVICE_URL=http://tts_service:8001
-      - STT_SERVICE_URL=http://stt_service:8003
-      - FINANCE_SERVICE_URL=http://finance_service:8006
-    depends_on:
-      - qdrant
-      - redis
-      - llm_service
-      - tts_service
-    networks:
-      - neural_net
-
-  # 10. QDRANT (Vector Database)
-  # Stores semantic memory (embeddings) for RAG (Retrieval-Augmented Generation).
+  # 12. QDRANT (Vector Database)
   qdrant:
     image: qdrant/qdrant:latest
     ports: ["6333:6333"]
@@ -185,12 +179,14 @@ services:
     networks:
       - neural_net
 
-  # 10. OLLAMA ENGINE
+  # 13. OLLAMA ENGINE
   ollama:
     image: ollama/ollama:latest
     ports: ["11434:11434"]
     volumes:
       - ollama_storage:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=-1
     deploy:
       resources:
         reservations:
@@ -201,7 +197,7 @@ services:
     networks:
       - neural_net
 
-  # 11. REDIS (Message Broker)
+  # 14. REDIS (Message Broker)
   redis:
     image: redis:alpine
     ports: ["6379:6379"]

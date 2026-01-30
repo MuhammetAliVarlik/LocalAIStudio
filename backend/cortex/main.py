@@ -5,6 +5,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from memory import memory_engine
+from services_client import service_client # Servis istemcisini import etmeyi unutma
+import asyncio
 from config import settings
 
 # Configure Logging
@@ -21,6 +23,47 @@ class InteractionRequest(BaseModel):
 @app.get("/health")
 def health_check():
     return {"status": "active", "module": "Cortex Orchestrator"}
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    Warm-up sequence to preload LLM into VRAM.
+    """
+    logger.info("🔥 Initiating System Warm-up...")
+    
+    # Arka planda çalıştır ki API'nin açılmasını bloklamasın
+    asyncio.create_task(warmup_llm())
+
+async def warmup_llm():
+    """
+    Sends a dummy request to LLM Service to force-load the model via Ollama.
+    """
+    try:
+        # Ollama'nın ayağa kalkması için biraz bekle
+        await asyncio.sleep(5) 
+        
+        logger.info("🧠 Warming up LLM (Loading model into VRAM)...")
+        # Basit, kısa bir prompt gönder
+        payload = {
+            "message": "hi",
+            "conversation_id": "warmup",
+            "stream": False
+        }
+        # Servis istemcisi üzerinden veya direkt request ile
+        # Burada ServiceClient yapımıza uygun bir metod ekleyebiliriz 
+        # veya basitçe requests/httpx kullanabiliriz.
+        # Örnek olarak service_client.chat_with_llm'i simüle ediyoruz:
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+             await client.post(
+                 f"{settings.LLM_SERVICE_URL}/chat", 
+                 json=payload
+             )
+             
+        logger.info("✅ LLM Warm-up Complete. System Ready.")
+        
+    except Exception as e:
+        logger.warning(f"⚠️ LLM Warm-up failed (might be ready later): {e}")
 
 @app.post("/interact")
 async def interact(req: InteractionRequest):

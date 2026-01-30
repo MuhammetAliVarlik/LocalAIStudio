@@ -3,6 +3,7 @@ from database import engine, Base
 from routers import auth, users
 from models import User, Persona
 from schemas import PersonaCreate
+from sqlalchemy.orm import Session
 
 # Create Tables
 Base.metadata.create_all(bind=engine)

@@ -1,220 +1,121 @@
-from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Response, Depends
-from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
 import httpx
+from fastapi import FastAPI, Request, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from config import settings
+from security import verify_token
+import logging
 
-app = FastAPI(title=settings.PROJECT_NAME)
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("API_Gateway")
 
-# --- CORS MIDDLEWARE ---
-# Frontend (localhost:3000) ile konuşabilmesi için şart
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    docs_url="/docs",
+    openapi_url="/openapi.json"
+)
+
+# CORS Configuration (Frontend access)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Prod'da ["http://localhost:3000"] yapılmalı
+    allow_origins=["*"], # In prod, specify frontend URL (e.g., http://localhost:3000)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- HTTP CLIENT ---
-# Tek bir client oluşturup reuse etmek performans için önemlidir
-http_client = httpx.AsyncClient()
+# --- Helper: Async Reverse Proxy ---
+async def forward_request(url: str, method: str, payload: dict = None, headers: dict = None):
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            if method == "GET":
+                resp = await client.get(url, params=payload, headers=headers)
+            elif method == "POST":
+                resp = await client.post(url, json=payload, headers=headers)
+            else:
+                return JSONResponse({"error": "Method not allowed"}, status_code=405)
+            
+            # Forward the status code and content
+            return JSONResponse(resp.json(), status_code=resp.status_code)
+        except Exception as e:
+            logger.error(f"Proxy Error to {url}: {e}")
+            raise HTTPException(status_code=503, detail="Service Unavailable")
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    await http_client.aclose()
+# --- PUBLIC ROUTES (No Auth Required) ---
 
-# --- HELPER: GENERIC PROXY ---
-async def forward_request(method: str, url: str, headers: dict = None, json=None, data=None, files=None):
-    """
-    Generic async proxy function with error handling.
-    """
+@app.get("/health")
+def health_check():
+    return {"status": "active", "gateway": "running"}
+
+@app.post("/auth/login")
+async def login_proxy(request: Request):
+    """Proxy login requests directly to Auth Service."""
     try:
-        # Header temizliği: Host header'ı genelde sorun çıkarır, onu forwarding'den çıkaralım
-        if headers:
-            headers = {k: v for k, v in headers.items() if k.lower() != 'host' and k.lower() != 'content-length'}
-
-        response = await http_client.request(
-            method, 
-            url, 
-            headers=headers,
-            json=json, 
-            data=data, 
-            files=files, 
-            timeout=60.0 # LLM cevapları uzun sürebilir
+        body = await request.json()
+        return await forward_request(
+            f"{settings.AUTH_SERVICE_URL}/login", 
+            "POST", 
+            body
         )
-        return response
-    except httpx.RequestError as exc:
-        print(f"Connection Error to {url}: {exc}")
-        raise HTTPException(status_code=503, detail=f"Service Unavailable: {url}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid Request")
 
-# =================================================================
-# 🔐 AUTH SERVICE ROUTES
-# =================================================================
+@app.post("/auth/register")
+async def register_proxy(request: Request):
+    """Proxy registration requests."""
+    try:
+        body = await request.json()
+        return await forward_request(
+            f"{settings.AUTH_SERVICE_URL}/users/", 
+            "POST", 
+            body
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid Request")
 
-@app.post("/api/register")
-async def register(request: Request):
-    # JSON verisini alıp Auth servisine iletiyoruz
-    body = await request.json()
-    resp = await forward_request("POST", f"{settings.AUTH_SERVICE_URL}/register", json=body)
-    return JSONResponse(resp.json(), status_code=resp.status_code)
+# --- PROTECTED ROUTES (Auth Required) ---
 
-@app.post("/api/token")
-async def login(request: Request):
-    # Login, JSON değil Form-Data kullanır (OAuth2 standardı)
-    form_data = await request.form()
+@app.api_route("/cortex/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def cortex_proxy(path: str, request: Request, username: str = Depends(verify_token)):
+    """
+    Intelligent Proxy to Cortex Orchestrator.
+    Intercepts /cortex/* and forwards it to the Cortex Service.
+    Supports Streaming (SSE) for chat responses.
+    """
+    target_url = f"{settings.CORTEX_URL}/{path}"
     
-    # Query Parametrelerini (remember_me) koru
-    params = request.query_params
-    query_str = f"?{params}" if params else ""
+    # Extract headers (pass auth token if needed by downstream, though we verified it)
+    # Usually we might inject a 'X-User-ID' header here for Cortex to know who is asking.
+    headers = {"X-User-ID": username}
     
-    resp = await forward_request(
-        "POST", 
-        f"{settings.AUTH_SERVICE_URL}/token{query_str}", 
-        data=form_data
-    )
-    return JSONResponse(resp.json(), status_code=resp.status_code)
-
-@app.post("/api/reset-password")
-async def reset_password(request: Request):
-    body = await request.json()
-    resp = await forward_request("POST", f"{settings.AUTH_SERVICE_URL}/reset-password", json=body)
-    return JSONResponse(resp.json(), status_code=resp.status_code)
-
-@app.get("/api/users/me")
-async def get_current_user(request: Request):
-    # Token'ı (Authorization Header) Auth servisine iletmek zorundayız
-    resp = await forward_request(
-        "GET", 
-        f"{settings.AUTH_SERVICE_URL}/users/me", 
-        headers=dict(request.headers)
-    )
-    return JSONResponse(resp.json(), status_code=resp.status_code)
-
-# =================================================================
-# 🧠 LLM SERVICE ROUTES
-# =================================================================
-
-@app.post("/api/chat")
-async def chat(request: Request):
-    body = await request.json()
-    
-    # Streaming isteği mi?
-    is_stream = body.get("stream", False)
-
-    if is_stream:
-        # Streaming Proxy: Gelen veriyi paket paket Frontend'e aktar
-        async def stream_generator():
-            async with http_client.stream("POST", f"{settings.LLM_SERVICE_URL}/chat", json=body) as resp:
-                async for chunk in resp.aiter_bytes():
-                    yield chunk
-
-        return StreamingResponse(stream_generator(), media_type="text/event-stream")
-    else:
-        # Normal Proxy
-        resp = await forward_request("POST", f"{settings.LLM_SERVICE_URL}/chat", json=body)
-        return JSONResponse(resp.json(), status_code=resp.status_code)
-
-# =================================================================
-# 🗣️ TTS SERVICE ROUTES (Text-to-Speech)
-# =================================================================
-
-@app.post("/api/tts")
-async def tts(request: Request):
-    body = await request.json()
-    
-    # TTS binary (ses dosyası) döner. Bunu JSON yapmamalıyız.
-    resp = await forward_request("POST", f"{settings.TTS_SERVICE_URL}/generate", json=body)
-    
-    if resp.status_code != 200:
-        return JSONResponse(resp.json(), status_code=resp.status_code)
+    try:
+        # Handle Streaming Requests (Chat) specifically
+        if "chat" in path or "interact" in path or "stream" in path:
+            body = await request.json() if request.method == "POST" else None
+            
+            # Create a generator for streaming response
+            async def stream_generator():
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    async with client.stream(request.method, target_url, json=body, headers=headers) as resp:
+                        async for chunk in resp.aiter_bytes():
+                            yield chunk
+            
+            return StreamingResponse(stream_generator(), media_type="text/event-stream")
         
-    return Response(content=resp.content, media_type="audio/wav")
+        # Handle Standard Requests
+        else:
+            body = await request.json() if request.method in ["POST", "PUT"] else None
+            params = dict(request.query_params) if request.method == "GET" else None
+            
+            return await forward_request(target_url, request.method, body or params, headers)
 
-# =================================================================
-# 👂 STT SERVICE ROUTES (Speech-to-Text)
-# =================================================================
-
-@app.post("/api/transcribe")
-async def transcribe(file: UploadFile = File(...)):
-    # Dosyayı RAM'e oku
-    file_content = await file.read()
+    except Exception as e:
+        logger.error(f"Cortex Proxy Error: {e}")
+        raise HTTPException(status_code=502, detail="Cortex Unreachable")
     
-    # httpx formatına hazırla
-    files = {
-        'file': (file.filename, file_content, file.content_type)
-    }
-    
-    resp = await forward_request("POST", f"{settings.STT_SERVICE_URL}/transcribe", files=files)
-    return JSONResponse(resp.json(), status_code=resp.status_code)
-
-# =================================================================
-# 🎭 MOCK PERSONAS (Optional Helper)
-# =================================================================
-@app.get("/api/personas")
-def get_personas():
-    # Şimdilik Gateway'de sabit tutuyoruz, ileride Auth veritabanına taşınabilir
-    return [
-        {
-            "id": "nova", 
-            "name": "Nova", 
-            "system_prompt": "You are Nova, a highly intelligent and efficient AI assistant focused on productivity and clear explanations.", 
-            "color": "#22d3ee", 
-            "voice": "af_sarah"
-        },
-        {
-            "id": "sage", 
-            "name": "Sage", 
-            "system_prompt": "You are Sage, a wise and philosophical AI guide. You prefer deep, thoughtful answers.", 
-            "color": "#10b981", 
-            "voice": "am_adam"
-        },
-        {
-            "id": "architect", 
-            "name": "Architect", 
-            "system_prompt": "You are The Architect. You are an expert software engineer and system designer. You speak in technical, precise terms.", 
-            "color": "#f472b6", 
-            "voice": "am_michael"
-        }
-    ]
-
-# =================================================================
-# 💸 FINANCE SERVICE ROUTES
-# =================================================================
-@app.get("/api/market/summary")
-async def market_summary(request: Request):
-    resp = await forward_request("GET", f"{settings.FINANCE_SERVICE_URL}/market/summary")
-    return JSONResponse(resp.json(), status_code=resp.status_code)
-
-@app.get("/api/market/history/{symbol}")
-async def market_history(symbol: str, request: Request):
-    resp = await forward_request("GET", f"{settings.FINANCE_SERVICE_URL}/market/history/{symbol}")
-    return JSONResponse(resp.json(), status_code=resp.status_code)
-
-# =================================================================
-# 🌍 INFO SERVICE ROUTES
-# =================================================================
-@app.get("/api/weather")
-async def weather(request: Request):
-    params = request.query_params
-    resp = await forward_request("GET", f"{settings.INFO_SERVICE_URL}/weather?{params}")
-    return JSONResponse(resp.json(), status_code=resp.status_code)
-
-@app.get("/api/news")
-async def news(request: Request):
-    params = request.query_params
-    resp = await forward_request("GET", f"{settings.INFO_SERVICE_URL}/news?{params}")
-    return JSONResponse(resp.json(), status_code=resp.status_code)
-
-# =================================================================
-# ⚡ AUTOMATION ROUTES
-# =================================================================
-@app.get("/api/tasks")
-async def get_tasks(request: Request):
-    resp = await forward_request("GET", f"{settings.AUTOMATION_SERVICE_URL}/tasks")
-    return JSONResponse(resp.json(), status_code=resp.status_code)
-
-@app.post("/api/tasks/{task_id}/toggle")
-async def toggle_task(task_id: str, request: Request):
-    resp = await forward_request("POST", f"{settings.AUTOMATION_SERVICE_URL}/tasks/{task_id}/toggle")
-    return JSONResponse(resp.json(), status_code=resp.status_code)
+@app.api_route("/info/{path:path}", methods=["GET"])
+async def info_proxy(path: str, request: Request):
+    target_url = f"http://info_service:8007/{path}"
+    return await forward_request(target_url, "GET", None, None)

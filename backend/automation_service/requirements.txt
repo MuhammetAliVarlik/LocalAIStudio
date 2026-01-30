@@ -5,3 +5,4 @@ requests
 celery
 redis
 python-dotenv
+pydantic-settings
