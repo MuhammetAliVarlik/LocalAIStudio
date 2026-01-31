@@ -3,9 +3,33 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { Float, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 import { AvatarState, VisualContext, ShapeFunction } from '../types';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, AlertCircle } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
-import { ANIMATION_REGISTRY, animateIdle } from './avatarAnimations'; // Import Registry
+import { ANIMATION_REGISTRY, animateIdle } from './avatarAnimations';
+
+// --- ERROR BOUNDARY COMPONENT ---
+// Catches WebGL context failures to prevent white-screen crashes
+class WebGLErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any) {
+    console.error("WebGL Context Creation Failed:", error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
 
 interface VoiceAvatarProps {
   state?: AvatarState; 
@@ -14,23 +38,49 @@ interface VoiceAvatarProps {
   compact?: boolean;
   visible?: boolean;
   primaryColor?: string; 
-  customShapeFn?: ShapeFunction; 
+  customShapeFn?: ShapeFunction;
+  // NEW: Prop to receive text for subtitles
+  subtitle?: string | null; 
 }
 
-const COUNT = 350; // Increased particle count for better visuals
+const COUNT = 350; 
 const _tempColor = new THREE.Color();
 const _tempObject = new THREE.Object3D();
+
+// --- 2D FALLBACK COMPONENT ---
+const FallbackAvatar = ({ color, state }: { color: string, state: AvatarState }) => (
+  <div className="w-full h-full flex items-center justify-center bg-black/20 rounded-xl border border-white/5">
+     <div className="relative flex flex-col items-center gap-2">
+        <div 
+            className={`w-16 h-16 rounded-full border-2 shadow-[0_0_30px_rgba(0,0,0,0.5)] transition-all duration-300 ${
+                state === AvatarState.SPEAKING ? 'scale-110' : 'scale-100'
+            }`}
+            style={{ 
+                backgroundColor: color,
+                boxShadow: `0 0 20px ${color}40`,
+                borderColor: '#ffffff20'
+            }}
+        >
+            {state === AvatarState.THINKING && (
+                <div className="absolute inset-0 rounded-full border-t-2 border-white animate-spin" />
+            )}
+        </div>
+        <div className="flex items-center gap-1 text-[10px] text-zinc-500 font-mono">
+            <AlertCircle size={10} />
+            <span>Low Power Mode</span>
+        </div>
+     </div>
+  </div>
+);
 
 const VoxelCloud = ({ state, audioLevel, primaryColor }: { state: AvatarState, audioLevel: number, primaryColor: string }) => {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   
-  // Static random phase for each particle
   const particleData = useMemo(() => new Array(COUNT).fill(0).map((_, i) => ({ 
       phase: Math.random() * Math.PI * 2,
       speed: 0.02 + Math.random() * 0.05
   })), []);
 
-  // Initialize particles at origin
   const particles = useRef(new Array(COUNT).fill(0).map(() => ({ x: 0, y: 0, z: 0 })));
 
   useFrame((stateContext) => {
@@ -38,40 +88,28 @@ const VoxelCloud = ({ state, audioLevel, primaryColor }: { state: AvatarState, a
     const time = stateContext.clock.getElapsedTime();
     const audioFactor = Math.max(0, audioLevel / 50); 
     
-    // 1. SELECT ANIMATION FUNCTION
-    // Get the math function from registry based on current state
     const animationFn = ANIMATION_REGISTRY[state] || animateIdle;
 
     particleData.forEach((data, i) => {
-        // 2. CALCULATE TARGET POSITION
-        // We delegate the math to the imported function
         const target = animationFn(i, COUNT, time, audioFactor);
         
         let { x: tx, y: ty, z: tz } = target;
         let c = target.color || primaryColor;
 
-        // 3. INTERPOLATION (LERP)
-        // Smoothly move current particle position towards target position
-        // "0.1" is the smoothing factor (lower = smoother/slower)
         const p = particles.current[i];
         p.x += (tx - p.x) * 0.1;
         p.y += (ty - p.y) * 0.1;
         p.z += (tz - p.z) * 0.1;
 
-        // 4. UPDATE THREE.JS OBJECT
         _tempObject.position.set(p.x, p.y, p.z);
-        
-        // Rotation adds extra life (slow spin for individual cubes)
         _tempObject.rotation.set(time + data.phase, time, 0); 
         
-        // Dynamic scaling (Audio beat effect)
         const scale = 0.05 + (audioFactor * 0.02);
         _tempObject.scale.setScalar(scale);
         
         _tempObject.updateMatrix();
         meshRef.current?.setMatrixAt(i, _tempObject.matrix);
         
-        // 5. UPDATE COLOR
         _tempColor.set(c);
         meshRef.current?.setColorAt(i, _tempColor);
     });
@@ -87,7 +125,7 @@ const VoxelCloud = ({ state, audioLevel, primaryColor }: { state: AvatarState, a
       <boxGeometry args={[1, 1, 1]} /> 
       <meshPhysicalMaterial 
         color="#ffffff" 
-        emissive={primaryColor} // Base glow
+        emissive={primaryColor} 
         emissiveIntensity={1.5} 
         roughness={0.2}
         metalness={0.8}
@@ -117,6 +155,7 @@ const VoiceAvatar = React.memo((props: VoiceAvatarProps) => {
 
   return (
     <div className={`relative w-full h-full transition-opacity duration-500`}>
+      {/* 1. TOP BAR (Persona Selector) */}
       {!props.compact && (
           <div className="absolute top-4 left-4 z-50">
               <button onClick={() => setShowSelector(!showSelector)} className="flex items-center gap-2 px-3 py-2 bg-black/40 backdrop-blur-md border border-white/10 rounded-lg hover:bg-white/10 transition-all group">
@@ -139,25 +178,54 @@ const VoiceAvatar = React.memo((props: VoiceAvatarProps) => {
           </div>
       )}
       
-      <Canvas camera={{ position: [0, 0, props.compact ? 14 : 11], fov: 30 }} dpr={[1, 1.5]} gl={{ powerPreference: "high-performance", alpha: true }}>
-          <ambientLight intensity={0.2} />
-          <pointLight 
-            position={[10, 10, 10]} 
-            intensity={1} 
-            color={currentState === AvatarState.THINKING ? '#fbbf24' : currentColor} 
-          />
-          <pointLight position={[-10, -10, -10]} intensity={0.5} color="blue" />
-          
-          {!props.compact && <Stars radius={100} depth={50} count={1000} factor={4} saturation={0} fade speed={1} />}
-          
-          <Float speed={1.5} rotationIntensity={0.2} floatIntensity={0.5}>
-               <VoxelCloud 
-                  state={currentState} 
-                  audioLevel={currentAudio} 
-                  primaryColor={currentColor} 
-               />
-          </Float>
-      </Canvas>
+      {/* 2. MAIN 3D CANVAS */}
+      <WebGLErrorBoundary fallback={<FallbackAvatar color={currentColor} state={currentState} />}>
+          <Canvas 
+            camera={{ position: [0, 0, props.compact ? 14 : 11], fov: 30 }} 
+            dpr={[1, 1.5]}
+            gl={{ 
+                powerPreference: "default", 
+                alpha: true,
+                antialias: true,
+                depth: true
+            }} 
+          >
+              <ambientLight intensity={0.2} />
+              <pointLight 
+                position={[10, 10, 10]} 
+                intensity={1} 
+                color={currentState === AvatarState.THINKING ? '#fbbf24' : currentColor} 
+              />
+              <pointLight position={[-10, -10, -10]} intensity={0.5} color="blue" />
+              
+              {!props.compact && <Stars radius={100} depth={50} count={1000} factor={4} saturation={0} fade speed={1} />}
+              
+              <Float speed={1.5} rotationIntensity={0.2} floatIntensity={0.5}>
+                  <VoxelCloud 
+                      state={currentState} 
+                      audioLevel={currentAudio} 
+                      primaryColor={currentColor} 
+                  />
+              </Float>
+          </Canvas>
+      </WebGLErrorBoundary>
+
+      {/* 3. NEW: SUBTITLE OVERLAY (Shows STT Result) */}
+      {props.subtitle && (
+         <div className="absolute bottom-12 left-0 right-0 z-50 flex justify-center px-4 pointer-events-none">
+            <div className="bg-black/40 backdrop-blur-lg border border-white/10 px-6 py-4 rounded-2xl shadow-2xl max-w-2xl transform transition-all duration-300 hover:bg-black/60 animate-in fade-in slide-in-from-bottom-2">
+                <p className="text-lg md:text-xl font-medium text-white/90 text-center leading-relaxed font-sans drop-shadow-md">
+                   "{props.subtitle}"
+                </p>
+                {/* Visual Indicator */}
+                <div className="flex justify-center mt-2">
+                    <div className="h-1 w-8 rounded-full bg-white/20">
+                        <div className="h-full bg-white/60 w-1/2 rounded-full animate-pulse mx-auto"/>
+                    </div>
+                </div>
+            </div>
+         </div>
+      )}
     </div>
   );
 });

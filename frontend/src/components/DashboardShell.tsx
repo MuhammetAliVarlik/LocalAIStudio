@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   Mic, Code, Send, Plus, Menu, Settings, Sparkles, Brain, Zap, LogOut, 
   Sun, Clock, AlertTriangle, X, Terminal, Volume2, CloudRain, ShoppingBag, 
@@ -20,7 +20,7 @@ import { AgentMarketplace } from './AgentMarketplace';
 import { KnowledgeBase } from './KnowledgeBase';
 import { BioHub } from './BioHub';
 import { CommunicationCenter } from './CommunicationCenter';
-import { SystemControl } from './SystemControl';
+// import { SystemControl } from './SystemControl'; // Removed
 import { TemporalCalendar } from './TemporalCalendar';
 import { HistorySidebar } from './HistorySidebar';
 import { Dreamscape } from './Dreamscape';
@@ -31,18 +31,66 @@ import GlobalAssistant from './GlobalAssistant';
 import { Agent, AppMode, AvatarState, VisualContext } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppContext } from '../context/AppContext';
+import { useAudioRecorder } from '../hooks/useAudioRecorder';
 
 export const DashboardShell: React.FC = () => {
   const { state, actions } = useAppContext();
-  const { user, isAuthenticated, mode, agents, activeAgentId, conversations, activeConversationId, avatarState, visualContext, audioLevel, customShapeFn } = state;
+  const { user, isAuthenticated, mode, agents, activeAgentId, conversations, activeConversationId, avatarState, visualContext, audioLevel, customShapeFn, isListening } = state;
   
   const [input, setInput] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [isMarketplaceOpen, setIsMarketplaceOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // --- 1. Subtitle State ---
+  const [currentSubtitle, setCurrentSubtitle] = useState<string | null>(null);
 
+  // --- 2. Stable Callback Pattern (FIX for Infinite Loop) ---
+  // We use a ref to hold the latest logic so the function passed to the hook never changes identity.
+  const onTranscriptionRef = useRef((text: string) => {});
+
+  // Update the ref on every render to ensure we have the fresh 'actions' and state
+  useEffect(() => {
+    onTranscriptionRef.current = (text: string) => {
+        console.log("🗣️ Voice Input:", text);
+        setCurrentSubtitle(text); 
+        actions.sendMessage(text);
+    };
+  }); // No dependency array intended
+
+  // This callback is stable and won't trigger the hook's effect loop
+  const stableTranscriptionHandler = useCallback((text: string) => {
+      onTranscriptionRef.current(text);
+  }, []);
+
+  // --- 3. Initialize Voice Recorder ---
+  const { startStreaming, stopStreaming } = useAudioRecorder(stableTranscriptionHandler);
+
+  // --- 4. Sync Microphone with Global 'isListening' State ---
+  useEffect(() => {
+      if (isListening) {
+          startStreaming();
+          if (avatarState === AvatarState.IDLE) {
+              actions.setAvatarState(AvatarState.LISTENING);
+          }
+      } else {
+          stopStreaming();
+          if (avatarState === AvatarState.LISTENING) {
+              actions.setAvatarState(AvatarState.IDLE);
+          }
+      }
+  }, [isListening, startStreaming, stopStreaming, avatarState, actions]);
+
+  // --- 5. Auto-Clear Subtitle Timer ---
+  useEffect(() => {
+    if (currentSubtitle) {
+      const timer = setTimeout(() => setCurrentSubtitle(null), 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [currentSubtitle]);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeAgent = useMemo(() => agents.find(a => a.id === activeAgentId) || agents[0], [agents, activeAgentId]);
   const activeConversation = conversations.find(c => c.id === activeConversationId);
   const currentMessages = activeConversation?.messages || [];
@@ -56,20 +104,16 @@ export const DashboardShell: React.FC = () => {
       setInput('');
   };
 
-  const handleSaveAgent = () => {
-      if(!editingAgent) return;
-      if (agents.find(a => a.id === editingAgent.id)) actions.updateAgent(editingAgent);
-      else actions.addAgent(editingAgent);
-      setEditingAgent(null);
+  const handleToggleMic = () => {
+      actions.setListening(!isListening);
   };
 
   if (!isAuthenticated) return <LoginScreen />;
 
-  // Component Map
   const COMPONENTS: any = {
     [AppMode.CODING]: CodeStudio, [AppMode.DAILY]: DailyDashboard, [AppMode.RESEARCH]: ResearchLab,
     [AppMode.LANGUAGE]: LanguageCenter, [AppMode.NOTES]: KnowledgeBase, [AppMode.HEALTH]: BioHub,
-    [AppMode.COMMS]: CommunicationCenter, [AppMode.SYSTEM]: SystemControl, [AppMode.CALENDAR]: TemporalCalendar,
+    [AppMode.COMMS]: CommunicationCenter, [AppMode.SYSTEM]: null, [AppMode.CALENDAR]: TemporalCalendar,
     [AppMode.ART]: Dreamscape, [AppMode.FINANCE]: FinanceVault, [AppMode.HOME]: SmartHome3D,
     [AppMode.BUILDER]: AgentBuilder, [AppMode.AUTOMATION]: AutomationPanel,
   };
@@ -152,17 +196,40 @@ export const DashboardShell: React.FC = () => {
                <div className="absolute top-5 right-5 z-50 flex gap-2">
                    <button onClick={() => actions.setMode(AppMode.CODING)} className="glass-panel px-4 py-2 rounded-full text-xs font-mono text-zinc-400 hover:text-white hover:bg-white/10 transition-all flex items-center gap-2 animate-breath"><Terminal size={12} /> ENTER TERMINAL</button>
                </div>
+               
                <div className="absolute inset-0 flex items-center justify-center z-0">
                    {mode === AppMode.VOICE && (
-                       <VoiceAvatar state={avatarState} visualContext={visualContext} audioLevel={audioLevel} primaryColor={activeAgent.primaryColor} visible={true} customShapeFn={customShapeFn} onPersonaChange={(id) => actions.setActiveAgent(id)} />
+                       <VoiceAvatar 
+                           state={avatarState} 
+                           visualContext={visualContext} 
+                           audioLevel={audioLevel} 
+                           primaryColor={activeAgent.primaryColor} 
+                           visible={true} 
+                           customShapeFn={customShapeFn} 
+                           onPersonaChange={(id) => actions.setActiveAgent(id)}
+                           subtitle={currentSubtitle}
+                       />
                    )}
                </div>
+
                <div className="absolute inset-0 flex flex-col z-10 p-6 md:p-12 pointer-events-none">
                    {latestMessage && <SubtitleStream text={latestMessage.text} isUser={latestMessage.role === 'user'} isTyping={latestMessage.isTyping || false} />}
                    <div className="flex-1"></div>
                    <div className="w-full max-w-2xl mx-auto pointer-events-auto relative">
                        <div className="glass-panel rounded-full p-2 pl-6 flex items-center gap-4 bg-black/80 backdrop-blur-xl border border-white/10 shadow-2xl animate-breath">
-                           <button onClick={() => actions.setAvatarState(avatarState === AvatarState.LISTENING ? AvatarState.IDLE : AvatarState.LISTENING)} className={`p-3 rounded-full transition-all duration-300 ${avatarState === AvatarState.LISTENING ? 'bg-red-500/20 text-red-400 animate-pulse' : 'bg-white/5 text-zinc-400 hover:text-white'}`}>{avatarState === AvatarState.LISTENING ? <Volume2 size={20} /> : <Mic size={20} />}</button>
+                           
+                           {/* WIRED MICROPHONE BUTTON */}
+                           <button 
+                                onClick={handleToggleMic} 
+                                className={`p-3 rounded-full transition-all duration-300 ${
+                                    isListening 
+                                    ? 'bg-red-500/20 text-red-400 animate-pulse shadow-[0_0_15px_rgba(248,113,113,0.3)]' 
+                                    : 'bg-white/5 text-zinc-400 hover:text-white'
+                                }`}
+                           >
+                               {isListening ? <Volume2 size={20} /> : <Mic size={20} />}
+                           </button>
+
                            <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder={`Chat with ${activeAgent.name}...`} className="flex-1 bg-transparent border-none outline-none text-white placeholder-zinc-600 px-2 text-base h-12 font-light" />
                            <button onClick={handleSendMessage} className="p-3 bg-white/10 text-white rounded-full hover:bg-white/20 transition-all active:scale-95"><Send size={18} /></button>
                        </div>

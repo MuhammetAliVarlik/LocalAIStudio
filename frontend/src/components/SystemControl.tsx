@@ -1,26 +1,56 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Power, Shield, RefreshCw, Activity, Lock } from 'lucide-react';
+import { useAudioRecorder } from '../hooks/useAudioRecorder';
+import { useChatStream } from '../hooks/useChatStream'; 
+
+interface SystemControlProps {
+    // This callback sends the text to App.tsx
+    onTranscription?: (text: string) => void;
+}
 
 /**
  * SystemControl Component
- * * Provides high-level system management controls including power state toggling,
- * security level adjustment, and reboot functionality.
- * * @component
+ * Provides high-level system management controls and orchestrates the Voice-to-LLM pipeline.
  */
-export const SystemControl: React.FC = () => {
-  // State for system power status (simulation)
-  const [active, setActive] = useState(true);
+export const SystemControl: React.FC<SystemControlProps> = ({ onTranscription }) => {
+  // State for system power status
+  const [active, setActive] = useState(false); 
   
   // State for current security protocol level
   const [securityLevel, setSecurityLevel] = useState<'LOW' | 'MED' | 'HIGH'>('HIGH');
 
-  /**
-   * Toggles the system power state.
-   * In a real implementation, this would trigger a backend shutdown/startup sequence.
-   */
+  // --- LOGIC INJECTION START ---
+  
+  // 1. Get the Chat Hook to send messages to LLM
+  const { sendMessage } = useChatStream(); 
+
+  // 2. Initialize Recorder Hook with a callback
+  // When the backend returns text, this function runs.
+  const { startStreaming, stopStreaming } = useAudioRecorder((text) => {
+      console.log("⚡ Voice Command Received:", text);
+      
+      // A. Send text to LLM (Brain)
+      sendMessage(text);
+      
+      // B. Send text to UI (Subtitle)
+      if (onTranscription) {
+          onTranscription(text);
+      }
+  });
+
+  // 3. Sync "Power State" with "Microphone State"
+  useEffect(() => {
+      if (active) {
+          startStreaming();
+      } else {
+          stopStreaming();
+      }
+  }, [active, startStreaming, stopStreaming]);
+
+  // --- LOGIC INJECTION END ---
+
   const handleTogglePower = () => {
     setActive(prev => !prev);
-    // TODO: Emit socket event for system state change
   };
 
   return (

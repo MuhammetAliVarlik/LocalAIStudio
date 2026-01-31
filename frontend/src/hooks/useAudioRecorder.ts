@@ -1,106 +1,151 @@
-import { useState, useRef, useCallback } from 'react';
-import { STTService } from '../api/services';
+import { useState, useRef, useCallback, useEffect } from 'react';
 
-interface AudioRecorderState {
-  isRecording: boolean;
-  isProcessing: boolean;
-  error: string | null;
-}
+// Configuration
+const WS_URL = 'ws://localhost:8003/ws/transcribe';
+const VAD_THRESHOLD = 0.03;   // Volume Threshold (0.0 to 1.0)
+const SILENCE_DURATION = 800; // Milliseconds of silence before sending COMMIT
 
-export const useAudioRecorder = () => {
-  const [recorderState, setRecorderState] = useState<AudioRecorderState>({
-    isRecording: false,
-    isProcessing: false,
-    error: null
-  });
-
+export const useAudioRecorder = (onTranscription?: (text: string) => void) => {
+  const [isRecording, setIsRecording] = useState(false);
+  
+  // Refs
+  const socketRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
-  const startRecording = useCallback(async () => {
+  // Cleanup Function
+  const cleanup = useCallback(() => {
+    if (socketRef.current) {
+        socketRef.current.close();
+        socketRef.current = null;
+    }
+    if (mediaRecorderRef.current) {
+        if (mediaRecorderRef.current.state !== 'inactive') {
+            mediaRecorderRef.current.stop();
+        }
+        mediaRecorderRef.current = null;
+    }
+    if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+    }
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+  }, []);
+
+  const startStreaming = useCallback(async () => {
+    if (isRecording) return;
+    
     try {
-      // Request Microphone Permissions
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
-      // Create Recorder
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
+      // 1. Setup Audio Analysis (VAD)
+      audioContextRef.current = new AudioContext();
+      const source = audioContextRef.current.createMediaStreamSource(stream);
+      const analyser = audioContextRef.current.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      analyserRef.current = analyser;
 
-      // Event Handlers
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
+      // 2. Connect WebSocket
+      const ws = new WebSocket(WS_URL);
+      socketRef.current = ws;
+
+      ws.onopen = () => {
+        setIsRecording(true);
+        console.log("🎙️ Microphone Connected to Backend");
+        
+        // 3. Start Recording
+        const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        mediaRecorderRef.current = mediaRecorder;
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+            // Send Audio Chunk
+            ws.send(event.data);
+          }
+        };
+
+        // Send chunks every 100ms
+        mediaRecorder.start(100); 
+
+        // 4. Start VAD Loop
+        detectSilence();
+      };
+
+      ws.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'transcription' && data.text) {
+              console.log("📝 STT Result:", data.text);
+              if (onTranscription) onTranscription(data.text);
+            }
+        } catch (e) {
+            console.error("JSON Parse Error:", e);
         }
       };
 
-      mediaRecorder.start();
-      setRecorderState(prev => ({ ...prev, isRecording: true, error: null }));
+      ws.onerror = (e) => console.error("WebSocket Error:", e);
 
     } catch (err) {
       console.error("Microphone Access Error:", err);
-      setRecorderState(prev => ({ ...prev, error: "Microphone access denied" }));
+      setIsRecording(false);
     }
-  }, []);
+  }, [isRecording, onTranscription]);
 
-  const stopRecording = useCallback(async (): Promise<string | null> => {
-    return new Promise((resolve) => {
-      if (!mediaRecorderRef.current) {
-        resolve(null);
-        return;
+  // VAD Logic (Runs in a loop)
+  const detectSilence = () => {
+      if (!analyserRef.current || !socketRef.current) return;
+
+      const bufferLength = analyserRef.current.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      analyserRef.current.getByteTimeDomainData(dataArray);
+
+      // Calculate Volume (RMS)
+      let sum = 0;
+      for (let i = 0; i < bufferLength; i++) {
+          const x = (dataArray[i] - 128) / 128.0;
+          sum += x * x;
+      }
+      const rms = Math.sqrt(sum / bufferLength);
+
+      // If user is speaking (Volume > Threshold)
+      if (rms > VAD_THRESHOLD) {
+          // Clear any pending "Stop" command
+          if (silenceTimerRef.current) {
+              clearTimeout(silenceTimerRef.current);
+              silenceTimerRef.current = null;
+          }
+      } else {
+          // User is silent
+          // Start a timer if one isn't already running
+          if (!silenceTimerRef.current) {
+              silenceTimerRef.current = setTimeout(() => {
+                  // Timer Finished: The sentence is over.
+                  if (socketRef.current?.readyState === WebSocket.OPEN) {
+                      console.log("🛑 Silence detected -> Sending COMMIT");
+                      // This triggers the Backend logic
+                      socketRef.current.send(JSON.stringify({ text: "COMMIT" }));
+                  }
+              }, SILENCE_DURATION);
+          }
       }
 
-      const recorder = mediaRecorderRef.current;
-      setRecorderState(prev => ({ ...prev, isRecording: false, isProcessing: true }));
+      animationFrameRef.current = requestAnimationFrame(detectSilence);
+  };
 
-      recorder.onstop = async () => {
-        // 1. Create Audio Blob
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        
-        // 2. Send to STT Service
-        try {
-          // A. Async Upload (Returns Task ID)
-          const { task_id } = await STTService.transcribeAsync(audioBlob);
-          
-          // B. Poll for Result (Simple Polling)
-          // In production, use WebSockets or optimized endpoints for faster response
-          const text = await pollForTranscription(task_id);
-          resolve(text);
-          
-        } catch (error) {
-          console.error("Transcription Failed:", error);
-          setRecorderState(prev => ({ ...prev, error: "Transcription failed" }));
-          resolve(null);
-        } finally {
-          setRecorderState(prev => ({ ...prev, isProcessing: false }));
-          
-          // Cleanup Tracks
-          recorder.stream.getTracks().forEach(track => track.stop());
-        }
-      };
+  const stopStreaming = useCallback(() => {
+    cleanup();
+    setIsRecording(false);
+  }, [cleanup]);
 
-      recorder.stop();
-    });
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => cleanup();
   }, []);
 
-  return {
-    ...recorderState,
-    startRecording,
-    stopRecording
-  };
+  return { startStreaming, stopStreaming };
 };
-
-// --- HELPER: Simple Polling Logic ---
-async function pollForTranscription(taskId: string, attempts = 10, interval = 500): Promise<string | null> {
-  for (let i = 0; i < attempts; i++) {
-    await new Promise(r => setTimeout(r, interval));
-    try {
-      const result = await STTService.getTaskResult(taskId);
-      if (result.status === 'SUCCESS') return result.text;
-      if (result.status === 'FAILURE') return null;
-    } catch (e) {
-      console.warn("Polling error:", e);
-    }
-  }
-  return null; // Timed out
-}
