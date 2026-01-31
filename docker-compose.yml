@@ -13,17 +13,18 @@ services:
     networks:
       - neural_net
 
-  # 2. API GATEWAY (Public Facing Entry Point)
-  # Tüm trafik buradan geçer. Auth ve Cortex'e yönlendirir.
+  # 2. API GATEWAY
   api_gateway:
     build: ./backend/api_gateway
     ports: ["8000:8000"]
     environment:
       - AUTH_SERVICE_URL=http://auth_service:8002
       - CORTEX_URL=http://cortex:8000
+      - INFO_SERVICE_URL=http://info_service:8007
     depends_on:
       - auth_service
       - cortex
+      - info_service
     networks:
       - neural_net
 
@@ -33,36 +34,39 @@ services:
     ports: ["8002:8002"]
     volumes:
       - ./backend/auth_service:/app
-      - ./workspace_data:/app/workspace # Persist DB
+      - ./workspace_data:/app/workspace
     networks:
       - neural_net
 
-  # 4. CORTEX ORCHESTRATOR (The Brain)
-  # Diğer tüm servisleri yönetir.
+  # 4. CORTEX ORCHESTRATOR
   cortex:
     build: ./backend/cortex
-    # Host portunu 8008 yaptık (Gateway 8000 ile çakışmasın diye).
-    # Docker içi port 8000'dir.
     ports: ["8008:8000"] 
     environment:
       - LOG_LEVEL=INFO
       - QDRANT_URL=http://qdrant:6333
       - REDIS_URL=redis://redis:6379/0
-      # Service Discovery URLs (Internal)
       - LLM_SERVICE_URL=http://llm_service:8004
       - TTS_SERVICE_URL=http://tts_service:8001
       - STT_SERVICE_URL=http://stt_service:8003
       - FINANCE_SERVICE_URL=http://finance_service:8006
+      - AUTOMATION_SERVICE_URL=http://automation_service:8005
+      - HF_HUB_DOWNLOAD_TIMEOUT=300   # 5 minutes
+      - HF_HUB_ETAG_TIMEOUT=300
+      - HF_HOME=/app/data/hf_cache    # Standard HF cache location
+      - FASTEMBED_CACHE_PATH=/app/data/fastembed_cache
     depends_on:
       - qdrant
       - redis
       - llm_service
       - tts_service
       - finance_service
+    volumes:
+      - cortex_data:/app/data
     networks:
       - neural_net
 
-  # 5. STT SERVICE (API - Producer)
+  # 5. STT SERVICE (API)
   stt_service:
     build: ./backend/stt_service
     ports: ["8003:8003"]
@@ -76,15 +80,17 @@ services:
     networks:
       - neural_net
 
-  # 6. STT WORKER (GPU - Consumer)
+  # 6. STT WORKER (GPU - Faster Whisper)
   stt_worker:
     build: ./backend/stt_service
+    # Concurrency 1, GPU memory safe mode
     command: celery -A celery_stt worker --loglevel=info --concurrency=1 -Q stt_queue
     environment:
       - REDIS_URL=redis://redis:6379/0
       - SHARED_VOL=/app/shared_data
-      - WHISPER_MODEL_SIZE=base
+      - WHISPER_MODEL_SIZE=small 
       - WHISPER_DEVICE=cuda
+      - COMPUTE_TYPE=float16
     volumes:
       - stt_shared_data:/app/shared_data
       - whisper_models:/opt/whisper_models
@@ -100,7 +106,7 @@ services:
     networks:
       - neural_net
 
-  # 7. LLM SERVICE
+  # 7. LLM SERVICE (Client for Ollama)
   llm_service:
     build: ./backend/llm_service
     ports: ["8004:8004"]
@@ -114,20 +120,23 @@ services:
     networks:
       - neural_net
 
-  # 8. TTS SERVICE
+  # 8. TTS SERVICE (Kokoro - CPU Optimized)
   tts_service:
     build: ./backend/tts_service
     ports: ["8001:8001"]
     environment:
       - LOG_LEVEL=INFO
-      - DEVICE=cpu
+      # CPU is MANDATORY here to save VRAM for LLM+STT
+      - DEVICE=cpu 
       - USE_ONNX=true
-    volumes:
-      - tts_models:/opt/neural_models
+      - MODEL_PATH=/opt/neural_models/kokoro-v1.0.onnx
+      - VOICES_PATH=/opt/neural_models/voices-v1.0.bin
+    # volumes:
+    #   - tts_models:/opt/neural_models
     networks:
       - neural_net
 
-  # 9. FINANCE SERVICE
+  # 9. FINANCE SERVICE (Active but Idle)
   finance_service:
     build: ./backend/finance_service
     ports: ["8006:8006"]
@@ -143,7 +152,7 @@ services:
     networks:
       - neural_net
 
-  # 10. AUTOMATION SERVICE (API)
+  # 10. AUTOMATION SERVICE (Active but Idle)
   automation_service:
     build: ./backend/automation_service
     ports: ["8005:8005"]
@@ -156,7 +165,7 @@ services:
     networks:
       - neural_net
 
-  # 11. CELERY WORKER (General Automation)
+  # 11. CELERY WORKER (General Automation - CPU Only)
   celery_worker:
     build: ./backend/automation_service
     command: celery -A celery_app worker --loglevel=info
@@ -179,14 +188,14 @@ services:
     networks:
       - neural_net
 
-  # 13. OLLAMA ENGINE
+  # 13. OLLAMA ENGINE (GPU - Llama 3.2 1B)
   ollama:
     image: ollama/ollama:latest
     ports: ["11434:11434"]
     volumes:
       - ollama_storage:/root/.ollama
     environment:
-      - OLLAMA_KEEP_ALIVE=-1
+      - OLLAMA_KEEP_ALIVE=-1 
     deploy:
       resources:
         reservations:
@@ -197,7 +206,7 @@ services:
     networks:
       - neural_net
 
-  # 14. REDIS (Message Broker)
+  # 14. REDIS
   redis:
     image: redis:alpine
     ports: ["6379:6379"]
@@ -206,10 +215,10 @@ services:
     networks:
       - neural_net
       
-  # 15. INFO SERVICE (System Monitor & News)
+  # 15. INFO SERVICE
   info_service:
     build: ./backend/info_service
-    ports: ["8007:8007"]
+    ports: ["8007:8000"]
     environment:
       - LOG_LEVEL=INFO
     networks:
@@ -227,3 +236,4 @@ volumes:
   stt_shared_data:
   finance_data:
   qdrant_storage:
+  cortex_data:

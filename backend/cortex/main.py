@@ -13,7 +13,7 @@ from memory import memory_engine
 # --- ROUTER IMPORTS ---
 # We integrate the modular routers here.
 # Note: Ensure 'backend/cortex/routers/chat.py' exists and dependencies are met.
-from routers import chat, personas, system
+from routers import chat, personas
 
 # Configure Logging
 logging.basicConfig(

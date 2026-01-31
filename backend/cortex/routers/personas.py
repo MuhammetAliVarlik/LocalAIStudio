@@ -3,7 +3,7 @@ import glob
 import os
 import json
 from schemas import PersonaConfig
-from config import PERSONAS_DIR
+from config import settings
 
 router = APIRouter()
 
@@ -11,7 +11,7 @@ router = APIRouter()
 async def list_personas():
     personas = []
     try:
-        files = glob.glob(os.path.join(PERSONAS_DIR, "*.json"))
+        files = glob.glob(os.path.join(settings.PERSONAS_DIR, "*.json"))
         for filepath in files:
             try:
                 with open(filepath, "r") as f:

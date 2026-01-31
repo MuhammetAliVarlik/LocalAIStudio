@@ -1,104 +1,131 @@
-import logging
-import httpx
 import json
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
-from typing import AsyncGenerator
-
-# Local Imports
+import logging
+import asyncio
+import httpx
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from config import settings
-from memory import memory_engine
-from schemas import ChatRequest
 
 # Configure Logger
-logger = logging.getLogger("Cortex_Chat_Router")
+logger = logging.getLogger("Cortex_Chat")
 
 router = APIRouter()
 
-async def stream_generator(url: str, payload: dict) -> AsyncGenerator[bytes, None]:
+# --- SERVICES ---
+# Internal HTTP Clients for Microservices
+async def query_llm_stream(message: str, session_id: str):
     """
-    Proxies the streaming response from the downstream LLM Service to the client.
-    Handles connection timeouts and stream iteration.
+    Generator that yields chunks of text from the LLM Service.
     """
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            async with client.stream("POST", url, json=payload) as response:
-                # Check for non-200 status codes immediately
-                if response.status_code != 200:
-                    error_msg = f"LLM Service returned status: {response.status_code}"
-                    logger.error(error_msg)
-                    yield json.dumps({"error": error_msg}).encode("utf-8")
-                    return
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        # LLM servisine streaming request atıyoruz
+        async with client.stream(
+            "POST", 
+            f"{settings.LLM_SERVICE_URL}/chat", 
+            json={"message": message, "conversation_id": session_id, "stream": True}
+        ) as response:
+            async for chunk in response.aiter_lines():
+                if chunk:
+                    # SSE format: "data: {...}" parsing
+                    if chunk.startswith("data: "):
+                        data_str = chunk.replace("data: ", "").strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            if "content" in data:
+                                yield data["content"]
+                        except:
+                            pass
 
-                # Stream the content chunk by chunk
-                async for chunk in response.aiter_bytes():
-                    yield chunk
-                    
-        except httpx.ConnectError:
-            logger.error(f"Failed to connect to LLM Service at {url}")
-            yield json.dumps({"error": "LLM Service Unreachable"}).encode("utf-8")
-        except Exception as e:
-            logger.error(f"Streaming error: {e}")
-            yield json.dumps({"error": "Internal Stream Error"}).encode("utf-8")
-
-@router.post("/api/chat")
-async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
+async def generate_tts(text: str):
     """
-    Central Orchestration Endpoint for Chat.
-    
-    Workflow:
-    1. Retrieve relevant context from Semantic Memory (RAG).
-    2. Construct the system prompt based on Persona and Context.
-    3. Delegate the inference task to the LLM Service (via Streaming).
-    4. Asynchronously save the user's input to memory.
+    Fetches audio bytes from TTS Service for a given text fragment.
     """
-    logger.info(f"📨 Incoming Chat Request | Session: {request.session_id} | Persona: {request.persona_id}")
-
+    if not text or len(text.strip()) < 2: 
+        return None
+        
     try:
-        # --- 1. Memory Retrieval (RAG) ---
-        context_str = ""
-        if request.enable_memory:
-            # Fetch top 3 relevant memories
-            memories = memory_engine.search_memory(request.message, limit=3)
-            if memories:
-                context_str = "\n".join([f"- {m}" for m in memories])
-                logger.info(f"📚 RAG: Injected {len(memories)} memory fragments.")
-
-        # --- 2. Prompt Construction ---
-        # Base prompt could be fetched from a database in the future.
-        base_system_prompt = (
-            f"You are {request.persona_id.capitalize()}, an advanced AI assistant. "
-            "Use the provided context to answer accurately."
-        )
-
-        final_system_prompt = base_system_prompt
-        if context_str:
-            final_system_prompt += f"\n\n### RELEVANT MEMORY CONTEXT:\n{context_str}"
-
-        # --- 3. Construct Payload for LLM Service ---
-        llm_payload = {
-            "message": request.message,
-            "conversation_id": request.session_id,
-            "persona_system_prompt": final_system_prompt,
-            "stream": True
-        }
-
-        # --- 4. Background Task: Save User Input to Memory ---
-        # We use BackgroundTasks to avoid blocking the response stream.
-        if request.enable_memory:
-            background_tasks.add_task(
-                memory_engine.add_memory, 
-                request.message, 
-                {"role": "user", "session_id": request.session_id}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{settings.TTS_SERVICE_URL}/generate",
+                json={"text": text},
             )
-
-        # --- 5. Proxy Stream to Client ---
-        target_url = f"{settings.LLM_SERVICE_URL}/chat"
-        return StreamingResponse(
-            stream_generator(target_url, llm_payload),
-            media_type="text/event-stream"
-        )
-
+            if resp.status_code == 200:
+                return resp.content # Binary audio data (WAV/PCM)
     except Exception as e:
-        logger.error(f"Critical Orchestration Error: {e}")
-        raise HTTPException(status_code=500, detail="Orchestration Layer Failed")
+        logger.error(f"TTS Error: {e}")
+    return None
+
+# --- WEBSOCKET ENDPOINT ---
+
+@router.websocket("/ws/chat/{session_id}")
+async def websocket_chat(websocket: WebSocket, session_id: str, persona_id: str = Query("default")):
+    """
+    Full-Duplex Chat Endpoint.
+    Handles: Text In -> LLM Processing -> Text Out + Audio Out (Parallel)
+    """
+    await websocket.accept()
+    logger.info(f"WS Connected: {session_id} | Persona: {persona_id}")
+    
+    try:
+        while True:
+            # 1. Wait for User Message
+            # Expected JSON: { "type": "user_message", "content": "Hello" }
+            data = await websocket.receive_json()
+            
+            if data.get("type") == "interrupt":
+                # Frontend sent signal to stop current generation
+                # In a complex system, we would cancel the async tasks here.
+                # For now, we accept the signal and clear buffer.
+                logger.info("Interrupt signal received.")
+                continue
+
+            if data.get("type") == "user_message":
+                user_text = data.get("content")
+                logger.info(f"User said: {user_text}")
+
+                # 2. Process Pipeline
+                # We need to accumulate tokens to form sentences for TTS, 
+                # while streaming raw tokens to frontend for UI.
+                current_sentence = ""
+                
+                async for token in query_llm_stream(user_text, session_id):
+                    # Check connection state
+                    if websocket.client_state.name == "DISCONNECTED":
+                        break
+
+                    # A. Stream Text to Frontend immediately
+                    await websocket.send_json({
+                        "type": "text_chunk",
+                        "content": token
+                    })
+                    
+                    # B. Accumulate for TTS
+                    current_sentence += token
+                    
+                    # Simple heuristic: Split by punctuation to send to TTS
+                    if token in [".", "!", "?", "\n"]:
+                        # Send this sentence to TTS task
+                        audio_bytes = await generate_tts(current_sentence)
+                        if audio_bytes:
+                            # Send Audio Binary
+                            await websocket.send_bytes(audio_bytes)
+                        current_sentence = "" # Reset buffer
+
+                # Final flush if any text remains
+                if current_sentence.strip():
+                    audio_bytes = await generate_tts(current_sentence)
+                    if audio_bytes:
+                        await websocket.send_bytes(audio_bytes)
+
+                # Signal end of turn
+                await websocket.send_json({"type": "generation_end"})
+
+    except WebSocketDisconnect:
+        logger.info(f"WS Disconnected: {session_id}")
+    except Exception as e:
+        logger.error(f"WS Critical Error: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except:
+            pass
