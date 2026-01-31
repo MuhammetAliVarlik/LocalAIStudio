@@ -2,10 +2,10 @@ import httpx
 import logging
 import asyncio
 import websockets
+import os
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.websockets import WebSocketState
 from config import settings
 
 # Configure Logging
@@ -22,6 +22,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- CONFIG FALLBACKS ---
+# Ensure we catch env vars even if config.py isn't updated immediately
+STT_SERVICE_URL = os.getenv("STT_SERVICE_URL", "http://stt_service:8003")
 
 # --- HTTP UTILS ---
 async def forward_request(url: str, method: str, payload: dict = None, headers: dict = None):
@@ -106,6 +110,23 @@ async def info_proxy(path: str, request: Request):
     target_url = f"{settings.INFO_SERVICE_URL}/{path}"
     return await forward_request(target_url, request.method, payload, dict(request.headers))
 
+# --- FIX: ADD STT ROUTE ---
+@app.api_route("/stt/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def stt_proxy(path: str, request: Request):
+    """
+    Forward requests to the STT Service.
+    """
+    if request.method in ["POST", "PUT", "PATCH"]:
+        try:
+            payload = await request.json()
+        except:
+            payload = {}
+    else:
+        payload = request.query_params
+
+    target_url = f"{STT_SERVICE_URL}/{path}"
+    return await forward_request(target_url, request.method, payload, dict(request.headers))
+
 # --- CORTEX ROUTES (HTTP & WS) ---
 
 @app.websocket("/cortex/ws/chat/{session_id}")
@@ -117,7 +138,6 @@ async def cortex_ws_proxy(websocket: WebSocket, session_id: str, token: str = No
     await websocket.accept()
     
     # Construct internal Cortex WS URL
-    # Replace http:// with ws:// in configuration if needed, or hardcode protocol change
     cortex_host = settings.CORTEX_URL.replace("http://", "ws://").replace("https://", "wss://")
     target_url = f"{cortex_host}/ws/chat/{session_id}?token={token}&persona_id={persona_id}"
     

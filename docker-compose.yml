@@ -20,11 +20,15 @@ services:
     environment:
       - AUTH_SERVICE_URL=http://auth_service:8002
       - CORTEX_URL=http://cortex:8000
-      - INFO_SERVICE_URL=http://info_service:8007
+      # FIX: Point to internal container port 8000
+      - INFO_SERVICE_URL=http://info_service:8000
+      # FIX: Added STT Service URL
+      - STT_SERVICE_URL=http://stt_service:8003
     depends_on:
       - auth_service
       - cortex
       - info_service
+      - stt_service
     networks:
       - neural_net
 
@@ -218,6 +222,7 @@ services:
   # 15. INFO SERVICE
   info_service:
     build: ./backend/info_service
+    # FIX: Host 8007 maps to Container 8000
     ports: ["8007:8000"]
     environment:
       - LOG_LEVEL=INFO

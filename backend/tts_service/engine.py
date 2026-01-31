@@ -2,9 +2,25 @@ import os
 import io
 import soundfile as sf
 import numpy as np
-from kokoro_onnx import Kokoro
 import logging
 from config import settings
+
+# --- COMPATIBILITY FIX ---
+# Patch EspeakWrapper to avoid "has no attribute 'set_data_path'" error
+# and ensure it plays nice with the system library override.
+try:
+    from phonemizer.backend.espeak.wrapper import EspeakWrapper
+    if not hasattr(EspeakWrapper, 'set_data_path'):
+        def _dummy_set_data_path(path):
+            pass
+        EspeakWrapper.set_data_path = _dummy_set_data_path
+except ImportError:
+    logging.warning("Phonemizer not found, skipping compatibility patch.")
+except Exception as e:
+    logging.warning(f"Failed to apply EspeakWrapper patch: {e}")
+# -------------------------
+
+from kokoro_onnx import Kokoro
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
@@ -81,7 +97,6 @@ class TTSEngine:
                 byte_io.seek(0)
                 
                 # Yield the WAV data
-                # Note: The client must handle concatenated WAV headers or raw PCM
                 yield byte_io.read()
                 
             except Exception as e:

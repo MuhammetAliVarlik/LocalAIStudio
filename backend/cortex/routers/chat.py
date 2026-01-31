@@ -10,8 +10,19 @@ logger = logging.getLogger("Cortex_Chat")
 
 router = APIRouter()
 
+# --- VOICE MAP ---
+# Maps persona IDs to Kokoro voice codes
+# You can add more mappings here as needed
+PERSONA_VOICE_MAP = {
+    "default": "af_sarah",   # Default Female
+    "nova": "af_sarah",
+    "sage": "am_michael",    # Example Male
+    "cipher": "bf_emma",
+    "architect": "am_adam"
+}
+
 # --- SERVICES ---
-# Internal HTTP Clients for Microservices
+
 async def query_llm_stream(message: str, session_id: str):
     """
     Generator that yields chunks of text from the LLM Service.
@@ -37,7 +48,9 @@ async def query_llm_stream(message: str, session_id: str):
                         except:
                             pass
 
-async def generate_tts(text: str):
+# FIX: Added 'voice' parameter here.
+# The TTS Service requires 'voice' to know which speaker embedding to use.
+async def generate_tts(text: str, voice: str):
     """
     Fetches audio bytes from TTS Service for a given text fragment.
     """
@@ -48,12 +61,15 @@ async def generate_tts(text: str):
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{settings.TTS_SERVICE_URL}/generate",
-                json={"text": text},
+                # FIX: Payload now includes 'voice' and 'speed'
+                json={"text": text, "voice": voice, "speed": 1.0},
             )
             if resp.status_code == 200:
                 return resp.content # Binary audio data (WAV/PCM)
+            else:
+                logger.error(f"TTS Service returned {resp.status_code}: {resp.text}")
     except Exception as e:
-        logger.error(f"TTS Error: {e}")
+        logger.error(f"TTS Connection Error: {e}")
     return None
 
 # --- WEBSOCKET ENDPOINT ---
@@ -67,16 +83,15 @@ async def websocket_chat(websocket: WebSocket, session_id: str, persona_id: str 
     await websocket.accept()
     logger.info(f"WS Connected: {session_id} | Persona: {persona_id}")
     
+    # FIX: Select the correct voice based on the connected persona
+    selected_voice = PERSONA_VOICE_MAP.get(persona_id, "af_sarah")
+
     try:
         while True:
             # 1. Wait for User Message
-            # Expected JSON: { "type": "user_message", "content": "Hello" }
             data = await websocket.receive_json()
             
             if data.get("type") == "interrupt":
-                # Frontend sent signal to stop current generation
-                # In a complex system, we would cancel the async tasks here.
-                # For now, we accept the signal and clear buffer.
                 logger.info("Interrupt signal received.")
                 continue
 
@@ -85,12 +100,9 @@ async def websocket_chat(websocket: WebSocket, session_id: str, persona_id: str 
                 logger.info(f"User said: {user_text}")
 
                 # 2. Process Pipeline
-                # We need to accumulate tokens to form sentences for TTS, 
-                # while streaming raw tokens to frontend for UI.
                 current_sentence = ""
                 
                 async for token in query_llm_stream(user_text, session_id):
-                    # Check connection state
                     if websocket.client_state.name == "DISCONNECTED":
                         break
 
@@ -103,18 +115,17 @@ async def websocket_chat(websocket: WebSocket, session_id: str, persona_id: str 
                     # B. Accumulate for TTS
                     current_sentence += token
                     
-                    # Simple heuristic: Split by punctuation to send to TTS
+                    # Split by punctuation to create natural pauses
                     if token in [".", "!", "?", "\n"]:
-                        # Send this sentence to TTS task
-                        audio_bytes = await generate_tts(current_sentence)
+                        # FIX: Pass the 'selected_voice' to the generator
+                        audio_bytes = await generate_tts(current_sentence, selected_voice)
                         if audio_bytes:
-                            # Send Audio Binary
                             await websocket.send_bytes(audio_bytes)
                         current_sentence = "" # Reset buffer
 
                 # Final flush if any text remains
                 if current_sentence.strip():
-                    audio_bytes = await generate_tts(current_sentence)
+                    audio_bytes = await generate_tts(current_sentence, selected_voice)
                     if audio_bytes:
                         await websocket.send_bytes(audio_bytes)
 
@@ -125,7 +136,3 @@ async def websocket_chat(websocket: WebSocket, session_id: str, persona_id: str 
         logger.info(f"WS Disconnected: {session_id}")
     except Exception as e:
         logger.error(f"WS Critical Error: {e}")
-        try:
-            await websocket.send_json({"type": "error", "message": str(e)})
-        except:
-            pass
